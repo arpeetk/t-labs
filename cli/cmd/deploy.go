@@ -2,6 +2,9 @@ package cmd
 
 import (
 	"fmt"
+	"os/exec"
+	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/summiteight/t-labs/cli/pkg/deployer"
@@ -34,13 +37,32 @@ var deployCmd = &cobra.Command{
 		fmt.Printf("\nDone. Service %q deployed to namespace %q.\n", mf.Name, mf.Namespace())
 
 		if mf.Service.Type == "public" {
-			fmt.Println("Waiting for LoadBalancer IP...")
-			_ = runKubectl("get", "service", mf.Name, "-n", mf.Namespace(),
-				"--watch", "--output-watch-events",
-				"-o", "jsonpath={.status.loadBalancer.ingress[0].ip}")
+			printLoadBalancerIP(mf.Name, mf.Namespace())
 		}
 		return nil
 	},
+}
+
+// printLoadBalancerIP polls kubectl until the LoadBalancer IP is assigned (up to 2 minutes).
+// kubectl get --watch never exits on its own, so we poll instead.
+func printLoadBalancerIP(name, namespace string) {
+	fmt.Print("Waiting for LoadBalancer IP")
+	deadline := time.Now().Add(2 * time.Minute)
+	for time.Now().Before(deadline) {
+		out, err := exec.Command("kubectl", "get", "service", name,
+			"-n", namespace,
+			"-o", "jsonpath={.status.loadBalancer.ingress[0].ip}").Output()
+		if err == nil {
+			ip := strings.TrimSpace(string(out))
+			if ip != "" {
+				fmt.Printf("\nLoadBalancer IP: %s\n", ip)
+				return
+			}
+		}
+		fmt.Print(".")
+		time.Sleep(5 * time.Second)
+	}
+	fmt.Println("\nLoadBalancer IP not yet assigned — check with: kubectl get service", name, "-n", namespace)
 }
 
 func init() {

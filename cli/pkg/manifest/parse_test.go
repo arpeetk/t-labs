@@ -154,6 +154,19 @@ service: {type: public, port: 8080}`,
 		wantErr: "invalid",
 	},
 	{
+		name: "name with trailing hyphen",
+		yaml: `name: my-svc-
+environment: dev
+image: img:latest
+service: {type: public, port: 8080}`,
+		wantErr: "invalid",
+	},
+	{
+		name: "name exactly 64 chars (one over limit)",
+		yaml: "name: a234567890123456789012345678901234567890123456789012345678901234\nenvironment: dev\nimage: img:latest\nservice: {type: public, port: 8080}",
+		wantErr: "invalid",
+	},
+	{
 		name: "name exceeds 63 chars",
 		yaml: `name: this-name-is-way-too-long-for-kubernetes-and-gcp-resource-naming-rules
 environment: dev

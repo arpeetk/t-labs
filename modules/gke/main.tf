@@ -44,10 +44,20 @@ resource "google_container_cluster" "main" {
   location = var.region
 
   # Manage node pools separately; GKE requires initial_node_count=1 but removes it immediately.
-  # Do NOT add a node_config block here — it is ForceNew and would destroy the cluster on apply.
-  # Shielded VM is enforced on the actual node pool below.
   remove_default_node_pool = true
   initial_node_count       = 1
+
+  # node_config here applies only to the transient default node pool created above.
+  # It must be present: compute.requireShieldedVm org policy fires at pool creation time,
+  # before remove_default_node_pool can delete it, causing cluster creation to fail on fresh apply.
+  # WARNING: node_config is ForceNew in the Google provider — never change these values on an
+  # existing cluster, only set them to match the values already in state.
+  node_config {
+    shielded_instance_config {
+      enable_secure_boot          = true
+      enable_integrity_monitoring = true
+    }
+  }
 
   deletion_protection = var.deletion_protection
 

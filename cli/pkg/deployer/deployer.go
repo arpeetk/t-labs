@@ -117,6 +117,10 @@ func (d *Deployer) provisionGCPServiceAccount() error {
 	if !d.mf.NeedsGCPServiceAccount() {
 		return nil
 	}
+	// GCP service account IDs must be 6-30 characters.
+	if l := len(d.mf.Name); l < 6 || l > 30 {
+		return fmt.Errorf("service name %q has %d characters; GCP service account IDs must be 6-30 characters", d.mf.Name, l)
+	}
 	gsaName := d.mf.Name
 	gsaEmail := fmt.Sprintf("%s@%s.iam.gserviceaccount.com", gsaName, d.cfg.ProjectID)
 	ns := d.mf.Namespace()

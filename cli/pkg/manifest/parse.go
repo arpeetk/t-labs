@@ -8,9 +8,9 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// validName matches Kubernetes/GCP resource name rules: lowercase alphanumeric and hyphens,
-// must start with a letter, ≤63 characters.
-var validName = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
+// validName matches Kubernetes DNS label rules: lowercase alphanumeric and hyphens,
+// must start AND end with a letter or digit, ≤63 characters total.
+var validName = regexp.MustCompile(`^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$`)
 
 func Load(path string) (*Manifest, error) {
 	data, err := os.ReadFile(path)
