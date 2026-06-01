@@ -1,7 +1,7 @@
 project_id                 = "t-labs-stage-2"
 environment                = "stage"
 region                     = "us-east4"
-shared_project_id      = "t-labs-shared"
+shared_project_id          = "t-labs-shared"
 artifact_registry_location = "us-central1"
 artifact_registry_name     = "t-labs"
 
