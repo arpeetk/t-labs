@@ -1,0 +1,35 @@
+# tl deployer manifest — api-service
+# Private backend service with Cloud SQL and Secret Manager.
+name: api-service
+environment: dev
+
+image: us-central1-docker.pkg.dev/t-labs-shared/t-labs/api-service:latest
+replicas: 2
+
+resources:
+  cpu: "250m"
+  memory: "256Mi"
+
+service:
+  type: private   # ClusterIP — internal only, called by other services
+  port: 8080
+
+env:
+  - name: PORT
+    value: "8080"
+  - name: DB_USER
+    value: "appuser"
+  - name: DB_NAME
+    value: "appdb"
+
+secrets:
+  - envVar: DB_PASSWORD
+    secret: t-labs-dev-db-password
+
+iam:
+  roles:
+    - roles/secretmanager.secretAccessor
+    - roles/cloudsql.client
+
+connectivity:
+  cloudsql: t-labs-dev-2:us-central1:t-labs-dev-postgres-3484d924

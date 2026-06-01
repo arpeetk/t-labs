@@ -1,0 +1,21 @@
+# tl deployer manifest — hello-world
+# Public HTTP service, no external dependencies.
+name: hello-world
+environment: dev
+
+image: us-central1-docker.pkg.dev/t-labs-shared/t-labs/hello-world:latest
+replicas: 2
+
+resources:
+  cpu: "100m"
+  memory: "64Mi"
+
+service:
+  type: public
+  port: 8080
+
+env:
+  - name: ENV
+    value: "dev"
+  - name: PORT
+    value: "8080"
