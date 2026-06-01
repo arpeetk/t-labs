@@ -211,6 +211,83 @@ graph TD
 
 ---
 
+### CI / CD Architecture
+
+Three GitHub Actions workflows run on every change. All GCP authentication uses Workload Identity Federation — no long-lived service account keys are stored anywhere.
+
+```mermaid
+flowchart TD
+    PR["Pull Request → main"]
+    MERGE["Merge to main"]
+
+    subgraph CI["ci.yml — on: pull_request"]
+        CLI["CLI — build · vet · test\ngo build · vet · test ./pkg/..."]
+        FMT["Terraform — fmt\nterraform fmt -check -recursive"]
+        VAL["Terraform — validate\ndev · stage · prod in parallel"]
+        PLAN["Terraform — plan dev\nterraform plan → PR comment"]
+
+        FMT --> VAL --> PLAN
+    end
+
+    subgraph CD_TF["cd-terraform.yml — on: push to main\npaths: modules/** · environments/dev/**"]
+        APPLYDEV["Apply — dev\nauto on every merge\nconcurrency: queued, never cancelled"]
+        APPLYSTAGE["Apply — stage\nworkflow_dispatch only\nrequires GitHub environment approval"]
+        APPLYPROD["Apply — prod\nworkflow_dispatch only\nrequires GitHub environment approval"]
+    end
+
+    subgraph CD_IMG["cd-images.yml — on: push to main\npaths: apps/**"]
+        DETECT["Detect changed apps\ndorny/paths-filter"]
+        BHW["Build · push — hello-world\nonly if apps/hello-world/** changed"]
+        BAS["Build · push — api-service\nonly if apps/api-service/** changed"]
+        DETECT --> BHW & BAS
+    end
+
+    subgraph AUTH["GCP Auth — Workload Identity Federation"]
+        WIF["OIDC token exchange\ngithub.repository == arpeetk/t-labs"]
+        TFSA["Terraform SA\nterraform@t-labs-shared\nroles/owner on env folders"]
+        IMGSA["ci-image-pusher SA\nci-image-pusher@t-labs-shared\nroles/artifactregistry.writer only"]
+        WIF --> TFSA & IMGSA
+    end
+
+    subgraph AR["Artifact Registry · t-labs-shared"]
+        IMG["hello-world:latest · sha\napi-service:latest · sha"]
+    end
+
+    PR --> CI
+    MERGE --> CD_TF & CD_IMG
+    CI & CD_TF -->|"WIF + Terraform SA"| AUTH
+    CD_IMG -->|"WIF + image-pusher SA"| AUTH
+    BHW & BAS -->|"docker push"| AR
+
+    style PR    fill:#e8f0fe,stroke:#4285F4
+    style MERGE fill:#e6f4ea,stroke:#34a853
+    style APPLYDEV   fill:#e6f4ea,stroke:#34a853
+    style APPLYSTAGE fill:#fff8e1,stroke:#fbbc04
+    style APPLYPROD  fill:#fce8e6,stroke:#ea4335
+    style TFSA  fill:#4285F4,color:#fff,stroke:none
+    style IMGSA fill:#34a853,color:#fff,stroke:none
+    style WIF   fill:#fbbc04,color:#000,stroke:none
+    style AR    fill:#4285F4,color:#fff,stroke:none
+```
+
+**Workflow summary**
+
+| Workflow | Trigger | What it does |
+|----------|---------|--------------|
+| `ci.yml` | Pull request to `main` | Builds and tests the CLI; checks Terraform formatting; validates all three environment configs; runs `terraform plan` on dev and posts the output as a PR comment |
+| `cd-terraform.yml` | Push to `main` (paths: `modules/**`, `environments/dev/**`) | Auto-applies dev on every merge; stage and prod require a manual `workflow_dispatch` with GitHub environment protection (required reviewers) |
+| `cd-images.yml` | Push to `main` (paths: `apps/**`) | Detects which apps changed; rebuilds and pushes only those images — tagged `:latest` and `:<sha>` |
+
+**Security decisions**
+
+- **No stored credentials** — GitHub Actions exchanges its OIDC token for a short-lived GCP access token via WIF; the token is masked before being written to `GITHUB_ENV`
+- **Least-privilege image SA** — `ci-image-pusher` has only `roles/artifactregistry.writer` on the t-labs registry; a compromised Docker build context cannot escalate to infrastructure
+- **Saved plan in CD** — `cd-terraform.yml` runs `plan -out=tfplan` then `apply tfplan`; the apply is bounded to the reviewed plan and cannot diverge if state changes between steps
+- **Concurrency groups** — Terraform apply jobs use `cancel-in-progress: false`; concurrent merges queue rather than race
+- **Dev auto-apply, stage/prod gated** — only `environments/dev/**` and `modules/**` changes trigger auto-apply; stage and prod changes require a deliberate `workflow_dispatch` and pass through GitHub environment protection rules
+
+---
+
 ## The `tld` CLI
 
 `tld` translates a YAML manifest into GKE deployments. Engineers describe what their service needs; `tld` handles namespaces, GCP service accounts, Workload Identity, secret injection, and rollout waiting.
