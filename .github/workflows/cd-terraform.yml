@@ -50,7 +50,9 @@ jobs:
           token_format: access_token
 
       - name: Export SA token for Terraform
-        run: echo "GOOGLE_OAUTH_ACCESS_TOKEN=${{ steps.auth.outputs.access_token }}" >> "$GITHUB_ENV"
+        run: |
+          echo "GOOGLE_OAUTH_ACCESS_TOKEN=${{ steps.auth.outputs.access_token }}" >> "$GITHUB_ENV"
+          printf 'GOOGLE_CLOUD_PROJECT=\nCLOUDSDK_CORE_PROJECT=\nCLOUDSDK_PROJECT=\nGCLOUD_PROJECT=\nGCP_PROJECT=\n' >> "$GITHUB_ENV"
 
       - uses: hashicorp/setup-terraform@v3
         with:
@@ -79,7 +81,9 @@ jobs:
           token_format: access_token
 
       - name: Export SA token for Terraform
-        run: echo "GOOGLE_OAUTH_ACCESS_TOKEN=${{ steps.auth.outputs.access_token }}" >> "$GITHUB_ENV"
+        run: |
+          echo "GOOGLE_OAUTH_ACCESS_TOKEN=${{ steps.auth.outputs.access_token }}" >> "$GITHUB_ENV"
+          printf 'GOOGLE_CLOUD_PROJECT=\nCLOUDSDK_CORE_PROJECT=\nCLOUDSDK_PROJECT=\nGCLOUD_PROJECT=\nGCP_PROJECT=\n' >> "$GITHUB_ENV"
 
       - uses: hashicorp/setup-terraform@v3
         with:
@@ -108,7 +112,9 @@ jobs:
           token_format: access_token
 
       - name: Export SA token for Terraform
-        run: echo "GOOGLE_OAUTH_ACCESS_TOKEN=${{ steps.auth.outputs.access_token }}" >> "$GITHUB_ENV"
+        run: |
+          echo "GOOGLE_OAUTH_ACCESS_TOKEN=${{ steps.auth.outputs.access_token }}" >> "$GITHUB_ENV"
+          printf 'GOOGLE_CLOUD_PROJECT=\nCLOUDSDK_CORE_PROJECT=\nCLOUDSDK_PROJECT=\nGCLOUD_PROJECT=\nGCP_PROJECT=\n' >> "$GITHUB_ENV"
 
       - uses: hashicorp/setup-terraform@v3
         with:
