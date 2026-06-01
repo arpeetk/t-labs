@@ -11,7 +11,7 @@ gke_min_nodes    = 1
 gke_max_nodes    = 3
 
 # Cloud SQL — smallest tier sufficient for dev workloads
-cloudsql_tier = "db-g1-small"
+cloudsql_tier = "db-custom-1-3840"
 
 # Restrict to your office/VPN CIDRs in practice
 master_authorized_networks = [

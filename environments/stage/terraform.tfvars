@@ -11,7 +11,7 @@ gke_min_nodes    = 1
 gke_max_nodes    = 5
 
 # Cloud SQL — medium tier for stage load testing
-cloudsql_tier = "db-n1-standard-2"
+cloudsql_tier = "db-custom-2-7680"
 
 master_authorized_networks = [
   {

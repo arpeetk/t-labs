@@ -11,7 +11,7 @@ gke_min_nodes    = 2
 gke_max_nodes    = 10
 
 # Cloud SQL — production-grade tier
-cloudsql_tier = "db-n1-standard-4"
+cloudsql_tier = "db-custom-4-15360"
 
 # Restrict GKE API server access to your VPN or office egress IP.
 # Override at apply time: terraform apply -var='master_authorized_networks=[{cidr_block="x.x.x.x/32",display_name="vpn"}]'

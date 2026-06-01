@@ -30,7 +30,7 @@ variable "db_user" {
 }
 
 variable "tier" {
-  description = "Cloud SQL machine tier (e.g., db-g1-small, db-n1-standard-2, db-n1-standard-4)"
+  description = "Cloud SQL machine tier for ENTERPRISE edition (e.g., db-n1-standard-1, db-n1-standard-2, db-n1-standard-4)"
   type        = string
 }
 

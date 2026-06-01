@@ -28,8 +28,13 @@ resource "google_secret_manager_secret" "db_password" {
   secret_id = "${var.name}-db-password"
   project   = var.project_id
 
+  # auto replication is global and violates gcp.resourceLocations org policy
   replication {
-    auto {}
+    user_managed {
+      replicas {
+        location = var.region
+      }
+    }
   }
 }
 
@@ -52,6 +57,7 @@ resource "google_sql_database_instance" "main" {
 
   settings {
     tier              = var.tier
+    edition           = "ENTERPRISE"
     availability_type = "REGIONAL"
 
     backup_configuration {
