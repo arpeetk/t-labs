@@ -3,9 +3,14 @@ package manifest
 import (
 	"fmt"
 	"os"
+	"regexp"
 
 	"gopkg.in/yaml.v3"
 )
+
+// validName matches Kubernetes/GCP resource name rules: lowercase alphanumeric and hyphens,
+// must start with a letter, ≤63 characters.
+var validName = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
 
 func Load(path string) (*Manifest, error) {
 	data, err := os.ReadFile(path)
@@ -22,6 +27,9 @@ func Load(path string) (*Manifest, error) {
 func validate(m *Manifest) error {
 	if m.Name == "" {
 		return fmt.Errorf("name is required")
+	}
+	if !validName.MatchString(m.Name) {
+		return fmt.Errorf("name %q is invalid: must start with a lowercase letter, contain only lowercase letters, digits, and hyphens, and be ≤63 characters", m.Name)
 	}
 	if m.Environment == "" {
 		return fmt.Errorf("environment is required (dev|stage|prod)")

@@ -12,10 +12,9 @@ type Manifest struct {
 	Resources Resources `yaml:"resources"`
 	Service   Service   `yaml:"service"`
 
-	Env      []EnvVar      `yaml:"env"`
-	Secrets  []SecretRef   `yaml:"secrets"`
-	IAM      IAMConfig     `yaml:"iam"`
-	Connect  Connectivity  `yaml:"connectivity"`
+	Env     []EnvVar  `yaml:"env"`
+	Secrets []SecretRef `yaml:"secrets"`
+	IAM     IAMConfig   `yaml:"iam"`
 }
 
 type Resources struct {
@@ -48,13 +47,6 @@ type IAMConfig struct {
 	Roles []string `yaml:"roles"`
 }
 
-type Connectivity struct {
-	// CloudSQL enables the Cloud SQL Auth Proxy sidecar. Set to the instance
-	// connection name (project:region:instance) or "auto" to look it up from
-	// the environment's Terraform outputs.
-	CloudSQL string `yaml:"cloudsql"`
-}
-
 func (m *Manifest) Namespace() string {
 	if m.Environment == "" {
 		return "default"
@@ -68,10 +60,6 @@ func (m *Manifest) GCPServiceAccountName(projectID string) string {
 
 func (m *Manifest) NeedsGCPServiceAccount() bool {
 	return len(m.IAM.Roles) > 0
-}
-
-func (m *Manifest) NeedsCloudSQL() bool {
-	return m.Connect.CloudSQL != ""
 }
 
 func (m *Manifest) ServiceType() string {

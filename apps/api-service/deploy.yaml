@@ -1,5 +1,6 @@
 # tl deployer manifest — api-service
-# Private backend service with Cloud SQL and Secret Manager.
+# Private backend service with Cloud SQL (direct private IP) and Secret Manager.
+# DB_HOST: get the value from `terraform output cloudsql_private_ip` in environments/dev/
 name: api-service
 environment: dev
 
@@ -21,6 +22,8 @@ env:
     value: "appuser"
   - name: DB_NAME
     value: "appdb"
+  - name: DB_HOST
+    value: "10.241.220.2"  # terraform output cloudsql_private_ip (environments/dev/)
 
 secrets:
   - envVar: DB_PASSWORD
@@ -29,7 +32,3 @@ secrets:
 iam:
   roles:
     - roles/secretmanager.secretAccessor
-    - roles/cloudsql.client
-
-connectivity:
-  cloudsql: t-labs-dev-2:us-central1:t-labs-dev-postgres-3484d924

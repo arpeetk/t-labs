@@ -44,7 +44,6 @@ func main() {
 func connectDB() (*sql.DB, error) {
 	dsn := os.Getenv("DATABASE_URL")
 	if dsn == "" {
-		// Cloud SQL Auth Proxy listens on localhost:5432
 		host := os.Getenv("DB_HOST")
 		if host == "" {
 			host = "localhost"
@@ -108,6 +107,10 @@ func (s *Server) handleItems(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		http.Error(w, "query error: "+err.Error(), http.StatusInternalServerError)
+		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")

@@ -55,15 +55,22 @@ func (d *Deployer) Deploy() error {
 
 // Delete removes Kubernetes resources and optionally the GCP service account.
 func (d *Deployer) Delete() error {
-	steps := []struct {
+	// kubeContext must succeed — without it, kubectl operates against whatever cluster
+	// happens to be active in the current kubeconfig, which could be the wrong environment.
+	fmt.Printf("  → configure kubectl context...\n")
+	if err := d.configureKubeContext(); err != nil {
+		return fmt.Errorf("configure kubectl context: %w", err)
+	}
+
+	// Remaining steps are best-effort cleanup; warn but continue on failure.
+	cleanupSteps := []struct {
 		name string
 		fn   func() error
 	}{
-		{"configure kubectl context", d.configureKubeContext},
 		{"delete Kubernetes resources", d.deleteKubernetesResources},
 		{"delete GCP service account", d.deleteGCPServiceAccount},
 	}
-	for _, step := range steps {
+	for _, step := range cleanupSteps {
 		fmt.Printf("  → %s...\n", step.name)
 		if err := step.fn(); err != nil {
 			fmt.Printf("    warning: %v\n", err)
@@ -308,22 +315,6 @@ spec:
                   name: {{ $name }}-secrets
                   key: {{ .EnvVar }}
 {{- end }}
-{{- end }}
-{{- if .NeedsCloudSQL }}
-        - name: cloud-sql-proxy
-          image: gcr.io/cloud-sql-connectors/cloud-sql-proxy:2
-          args:
-            - "--structured-logs"
-            - "--port=5432"
-            - "--private-ip"
-            - "{{ .Connect.CloudSQL }}"
-          resources:
-            requests:
-              cpu: "50m"
-              memory: "64Mi"
-            limits:
-              cpu: "100m"
-              memory: "128Mi"
 {{- end }}
 ---
 apiVersion: v1

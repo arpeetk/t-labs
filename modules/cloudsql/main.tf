@@ -36,6 +36,12 @@ resource "google_secret_manager_secret" "db_password" {
       }
     }
   }
+
+  # replication is ForceNew in the Google provider — create_before_destroy prevents
+  # a destroy window where running pods can't read credentials during any future change.
+  lifecycle {
+    create_before_destroy = true
+  }
 }
 
 resource "google_secret_manager_secret_version" "db_password" {

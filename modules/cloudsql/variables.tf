@@ -30,8 +30,13 @@ variable "db_user" {
 }
 
 variable "tier" {
-  description = "Cloud SQL machine tier for ENTERPRISE edition (e.g., db-n1-standard-1, db-n1-standard-2, db-n1-standard-4)"
+  description = "Cloud SQL machine tier for ENTERPRISE edition. Must use db-custom-<cpu>-<mb> format."
   type        = string
+
+  validation {
+    condition     = can(regex("^db-custom-[0-9]+-[0-9]+$", var.tier))
+    error_message = "tier must be in db-custom-<cpu>-<memorymb> format (e.g., db-custom-1-3840). Shared-core and db-n1 tiers are not supported by ENTERPRISE edition."
+  }
 }
 
 variable "max_connections" {

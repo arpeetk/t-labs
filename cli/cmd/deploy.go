@@ -2,7 +2,6 @@ package cmd
 
 import (
 	"fmt"
-	"os"
 
 	"github.com/spf13/cobra"
 	"github.com/summiteight/t-labs/cli/pkg/deployer"
@@ -30,8 +29,7 @@ var deployCmd = &cobra.Command{
 		fmt.Printf("Deploying %q to %s (%s)\n", mf.Name, mf.Environment, cfg.ProjectID)
 		d := deployer.New(cfg, mf)
 		if err := d.Deploy(); err != nil {
-			fmt.Fprintln(os.Stderr, "Deploy failed:", err)
-			os.Exit(1)
+			return fmt.Errorf("deploy: %w", err)
 		}
 		fmt.Printf("\nDone. Service %q deployed to namespace %q.\n", mf.Name, mf.Namespace())
 

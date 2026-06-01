@@ -43,17 +43,11 @@ resource "google_container_cluster" "main" {
   project  = var.project_id
   location = var.region
 
-  # Manage node pools separately; GKE requires initial_node_count=1 but removes it immediately
+  # Manage node pools separately; GKE requires initial_node_count=1 but removes it immediately.
+  # Do NOT add a node_config block here — it is ForceNew and would destroy the cluster on apply.
+  # Shielded VM is enforced on the actual node pool below.
   remove_default_node_pool = true
   initial_node_count       = 1
-
-  # Shielded VM required by compute.requireShieldedVm org policy — applies to initial default pool
-  node_config {
-    shielded_instance_config {
-      enable_secure_boot          = true
-      enable_integrity_monitoring = true
-    }
-  }
 
   deletion_protection = var.deletion_protection
 
