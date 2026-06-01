@@ -16,6 +16,10 @@ crash.*.log
 *.tfvars
 *.tfvars.json
 
+# Re-include environment tfvars — they contain only sizing config, no secrets.
+# bootstrap/terraform.tfvars stays gitignored (contains org_id, billing account).
+!environments/*/terraform.tfvars
+
 # Ignore override files as they are usually used to override resources locally and so
 # are not checked in
 override.tf

@@ -1,0 +1,69 @@
+locals {
+  prefix = "t-labs-${var.environment}"
+  node_zones = [
+    "${var.region}-a",
+    "${var.region}-b",
+    "${var.region}-c",
+  ]
+}
+
+module "vpc" {
+  source = "../../modules/vpc"
+
+  name                     = local.prefix
+  project_id               = var.project_id
+  region                   = var.region
+  public_subnet_cidr       = "10.20.0.0/20"
+  private_gke_subnet_cidr  = "10.20.16.0/20"
+  private_data_subnet_cidr = "10.20.32.0/20"
+  pods_cidr                = "10.21.0.0/16"
+  services_cidr            = "10.22.0.0/20"
+}
+
+module "gke" {
+  source = "../../modules/gke"
+
+  name                  = local.prefix
+  project_id            = var.project_id
+  region                = var.region
+  environment           = var.environment
+  vpc_id                = module.vpc.vpc_id
+  private_gke_subnet_id = module.vpc.private_gke_subnet_id
+
+  master_cidr                = "172.16.2.0/28"
+  master_authorized_networks = var.master_authorized_networks
+  node_zones                 = local.node_zones
+  machine_type               = var.gke_machine_type
+  min_node_count             = var.gke_min_nodes
+  max_node_count             = var.gke_max_nodes
+  deletion_protection        = true
+}
+
+module "cloudsql" {
+  source = "../../modules/cloudsql"
+
+  name                = local.prefix
+  project_id          = var.project_id
+  region              = var.region
+  vpc_id              = module.vpc.vpc_id
+  database_name       = "appdb"
+  db_user             = "appuser"
+  tier                = var.cloudsql_tier
+  deletion_protection = true
+
+  depends_on = [module.vpc]
+}
+
+resource "google_artifact_registry_repository_iam_member" "gke_nodes_ar_reader" {
+  project    = var.management_project_id
+  location   = var.artifact_registry_location
+  repository = var.artifact_registry_name
+  role       = "roles/artifactregistry.reader"
+  member     = "serviceAccount:${module.gke.node_service_account_email}"
+}
+
+resource "google_project_iam_member" "gke_nodes_cloudsql_client" {
+  project = var.project_id
+  role    = "roles/cloudsql.client"
+  member  = "serviceAccount:${module.gke.node_service_account_email}"
+}
