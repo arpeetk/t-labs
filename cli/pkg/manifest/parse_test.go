@@ -1,3 +1,4 @@
+// Package manifest provides manifest parsing and validation.
 package manifest
 
 import (
