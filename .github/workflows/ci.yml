@@ -1,0 +1,150 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  id-token: write      # WIF token exchange
+  pull-requests: write  # post plan comment
+
+env:
+  TF_VERSION: "~> 1.8"
+  REGISTRY: us-central1-docker.pkg.dev/t-labs-shared/t-labs
+
+jobs:
+  # ── CLI: build · vet · test ────────────────────────────────────────────────
+  cli:
+    name: CLI — build · vet · test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: cli
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: cli/go.mod
+          cache-dependency-path: cli/go.sum
+
+      - run: go build ./...
+      - run: go vet ./...
+      - run: go test ./pkg/... -v -count=1
+
+  # ── Terraform: format check ────────────────────────────────────────────────
+  tf-fmt:
+    name: Terraform — fmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Check formatting
+        run: terraform fmt -check -recursive
+
+  # ── Terraform: validate all environments ───────────────────────────────────
+  tf-validate:
+    name: Terraform — validate ${{ matrix.env }}
+    runs-on: ubuntu-latest
+    needs: tf-fmt
+    strategy:
+      fail-fast: false
+      matrix:
+        env: [dev, stage, prod]
+    defaults:
+      run:
+        working-directory: environments/${{ matrix.env }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Init (no backend — providers only)
+        run: terraform init -backend=false
+
+      - name: Validate
+        run: terraform validate
+
+  # ── Terraform: plan dev and post as PR comment ─────────────────────────────
+  tf-plan:
+    name: Terraform — plan dev
+    runs-on: ubuntu-latest
+    needs: tf-validate
+    environment: dev
+    defaults:
+      run:
+        working-directory: environments/dev
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.TF_SA_EMAIL }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Init
+        run: terraform init -backend-config="bucket=t-labs-state-dev"
+
+      - name: Plan
+        id: plan
+        run: |
+          set +e
+          terraform plan -no-color 2>&1 | tee plan.txt
+          echo "exit_code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+
+      - name: Post plan as PR comment
+        uses: actions/github-script@v7
+        env:
+          PLAN_FILE: ${{ github.workspace }}/environments/dev/plan.txt
+        with:
+          script: |
+            const fs = require('fs');
+            const raw  = fs.readFileSync(process.env.PLAN_FILE, 'utf8');
+            const plan = raw.length > 60000 ? raw.slice(0, 60000) + '\n…(truncated)' : raw;
+            const status = '${{ steps.plan.outputs.exit_code }}' === '0' ? '✅' : '❌';
+            const body = [
+              `### ${status} Terraform Plan — dev`,
+              '<details><summary>Show plan output</summary>',
+              '',
+              '```hcl',
+              plan,
+              '```',
+              '</details>',
+            ].join('\n');
+
+            // Replace previous bot plan comment if present
+            const existing = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo:  context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            for (const c of existing.data) {
+              if (c.user.type === 'Bot' && c.body.includes('Terraform Plan — dev')) {
+                await github.rest.issues.deleteComment({
+                  owner: context.repo.owner,
+                  repo:  context.repo.repo,
+                  comment_id: c.id,
+                });
+              }
+            }
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo:  context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });
+
+      - name: Fail if plan errored
+        if: steps.plan.outputs.exit_code != '0'
+        run: exit 1

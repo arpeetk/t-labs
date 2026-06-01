@@ -1,0 +1,108 @@
+name: CD — Images
+
+# Builds and pushes container images to Artifact Registry whenever app source
+# changes land on main. Only the apps that actually changed are rebuilt.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'apps/**'
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  REGISTRY: us-central1-docker.pkg.dev/t-labs-shared/t-labs
+
+jobs:
+  # ── Detect which apps changed ──────────────────────────────────────────────
+  changes:
+    name: Detect changed apps
+    runs-on: ubuntu-latest
+    outputs:
+      hello-world: ${{ steps.filter.outputs.hello-world }}
+      api-service: ${{ steps.filter.outputs.api-service }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            hello-world:
+              - 'apps/hello-world/**'
+            api-service:
+              - 'apps/api-service/**'
+
+  # ── Shared auth step (re-used by both build jobs) ──────────────────────────
+  # NOTE: GitHub Actions does not support job-level output from auth — each
+  # build job authenticates independently (both run only when needed).
+
+  # ── hello-world ────────────────────────────────────────────────────────────
+  build-hello-world:
+    name: Build · push — hello-world
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.hello-world == 'true'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: google-github-actions/auth@v2
+        id: auth
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.TF_SA_EMAIL }}
+          token_format: access_token
+
+      - uses: docker/login-action@v3
+        with:
+          registry: us-central1-docker.pkg.dev
+          username: oauth2accesstoken
+          password: ${{ steps.auth.outputs.access_token }}
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: apps/hello-world
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/hello-world:latest
+            ${{ env.REGISTRY }}/hello-world:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ── api-service ────────────────────────────────────────────────────────────
+  build-api-service:
+    name: Build · push — api-service
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.api-service == 'true'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: google-github-actions/auth@v2
+        id: auth
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.TF_SA_EMAIL }}
+          token_format: access_token
+
+      - uses: docker/login-action@v3
+        with:
+          registry: us-central1-docker.pkg.dev
+          username: oauth2accesstoken
+          password: ${{ steps.auth.outputs.access_token }}
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: apps/api-service
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/api-service:latest
+            ${{ env.REGISTRY }}/api-service:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

@@ -1,0 +1,103 @@
+name: CD — Terraform
+
+# Applies Terraform automatically for dev on every merge to main when
+# infrastructure files change. Stage and prod require a manual workflow dispatch
+# so that applies are always intentional and reviewed.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'modules/**'
+      - 'environments/dev/**'
+      - 'environments/stage/**'
+      - 'environments/prod/**'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Environment to apply
+        required: true
+        type: choice
+        options: [dev, stage, prod]
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  TF_VERSION: "~> 1.8"
+
+jobs:
+  # ── Dev: auto-apply on every merge ────────────────────────────────────────
+  apply-dev:
+    name: Apply — dev
+    runs-on: ubuntu-latest
+    environment: dev
+    if: |
+      github.event_name == 'push' ||
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'dev')
+    defaults:
+      run:
+        working-directory: environments/dev
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.TF_SA_EMAIL }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - run: terraform init -backend-config="bucket=t-labs-state-dev"
+      - run: terraform apply -auto-approve -no-color
+
+  # ── Stage: manual dispatch only — requires GitHub environment protection ───
+  apply-stage:
+    name: Apply — stage
+    runs-on: ubuntu-latest
+    environment: stage   # configure required reviewers in GitHub repo settings
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'stage'
+    defaults:
+      run:
+        working-directory: environments/stage
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.TF_SA_EMAIL }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - run: terraform init -backend-config="bucket=t-labs-state-stage"
+      - run: terraform apply -auto-approve -no-color
+
+  # ── Prod: manual dispatch only — requires GitHub environment protection ─────
+  apply-prod:
+    name: Apply — prod
+    runs-on: ubuntu-latest
+    environment: prod    # configure required reviewers + deployment branches in GitHub repo settings
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'prod'
+    defaults:
+      run:
+        working-directory: environments/prod
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.TF_SA_EMAIL }}
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - run: terraform init -backend-config="bucket=t-labs-state-prod"
+      - run: terraform apply -auto-approve -no-color
