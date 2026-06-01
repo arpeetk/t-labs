@@ -57,6 +57,10 @@ resource "google_container_cluster" "main" {
       enable_secure_boot          = true
       enable_integrity_monitoring = true
     }
+    # Tags must match what the GKE API wrote to state on creation.
+    # The default pool is deleted immediately, but its node_config is immutable once
+    # the pool is gone — the GKE API rejects any update with "default-pool not found".
+    tags = ["gke-node", "${var.name}-node"]
   }
 
   deletion_protection = var.deletion_protection
