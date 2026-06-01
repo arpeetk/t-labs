@@ -1,7 +1,7 @@
-project_id                 = "t-labs-prod"
+project_id                 = "t-labs-prod-2"
 environment                = "prod"
 region                     = "us-west1"
-management_project_id      = "t-labs-management"
+shared_project_id      = "t-labs-shared"
 artifact_registry_location = "us-central1"
 artifact_registry_name     = "t-labs"
 

@@ -14,7 +14,7 @@ variable "environment" {
   type        = string
 }
 
-variable "management_project_id" {
+variable "shared_project_id" {
   description = "Project ID of the management project hosting Artifact Registry"
   type        = string
 }

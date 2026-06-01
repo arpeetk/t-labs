@@ -11,7 +11,7 @@ resource "google_storage_bucket" "state" {
   for_each = local.state_buckets
 
   name                        = each.value
-  project                     = google_project.management.project_id
+  project                     = google_project.shared.project_id
   location                    = var.region
   force_destroy               = false
   uniform_bucket_level_access = true
@@ -30,7 +30,7 @@ resource "google_storage_bucket" "state" {
     }
   }
 
-  depends_on = [google_project_service.management_apis]
+  depends_on = [google_project_service.shared_apis]
 }
 
 # Terraform SA gets full admin on all state buckets (storage.admin includes storage.buckets.get)

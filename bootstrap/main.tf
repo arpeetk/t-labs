@@ -44,9 +44,9 @@ resource "google_folder" "prod" {
 
 # ── Projects ────────────────────────────────────────────────────────────────
 
-resource "google_project" "management" {
-  name                = "${var.project_prefix}-management"
-  project_id          = "${var.project_prefix}-management"
+resource "google_project" "shared" {
+  name                = "${var.project_prefix}-shared"
+  project_id          = "${var.project_prefix}-shared"
   folder_id           = google_folder.shared_services.folder_id
   billing_account     = var.billing_account_id
   auto_create_network = false
@@ -54,7 +54,7 @@ resource "google_project" "management" {
 
 resource "google_project" "dev" {
   name                = "${var.project_prefix}-dev"
-  project_id          = "${var.project_prefix}-dev"
+  project_id          = "${var.project_prefix}-dev${var.env_project_suffix}"
   folder_id           = google_folder.dev.folder_id
   billing_account     = var.billing_account_id
   auto_create_network = false
@@ -62,7 +62,7 @@ resource "google_project" "dev" {
 
 resource "google_project" "stage" {
   name                = "${var.project_prefix}-stage"
-  project_id          = "${var.project_prefix}-stage"
+  project_id          = "${var.project_prefix}-stage${var.env_project_suffix}"
   folder_id           = google_folder.stage.folder_id
   billing_account     = var.billing_account_id
   auto_create_network = false
@@ -70,7 +70,7 @@ resource "google_project" "stage" {
 
 resource "google_project" "prod" {
   name                = "${var.project_prefix}-prod"
-  project_id          = "${var.project_prefix}-prod"
+  project_id          = "${var.project_prefix}-prod${var.env_project_suffix}"
   folder_id           = google_folder.prod.folder_id
   billing_account     = var.billing_account_id
   auto_create_network = false
@@ -78,16 +78,17 @@ resource "google_project" "prod" {
 
 # ── API enablement ──────────────────────────────────────────────────────────
 
-resource "google_project_service" "management_apis" {
+resource "google_project_service" "shared_apis" {
   for_each = toset([
     "cloudresourcemanager.googleapis.com",
     "storage.googleapis.com",
     "artifactregistry.googleapis.com",
     "iam.googleapis.com",
     "iamcredentials.googleapis.com",
+    "orgpolicy.googleapis.com",
   ])
 
-  project                    = google_project.management.project_id
+  project                    = google_project.shared.project_id
   service                    = each.value
   disable_dependent_services = false
   disable_on_destroy         = false

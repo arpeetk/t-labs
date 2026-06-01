@@ -1,6 +1,6 @@
 # t-labs Infrastructure
 
-Terraform infrastructure for the t-labs platform on GCP. Manages a full multi-environment platform — dev, stage, and prod — each with its own isolated GCP project, VPC, GKE cluster, and managed PostgreSQL database. All environments are provisioned from a single set of reusable Terraform modules and share a central management project for state storage and container images.
+Terraform infrastructure for the t-labs platform on GCP. Manages a full multi-environment platform — dev, stage, and prod — each with its own isolated GCP project, VPC, GKE cluster, and managed PostgreSQL database. All environments are provisioned from a single set of reusable Terraform modules and share a central shared-services project for state storage and container images.
 
 ---
 
@@ -18,7 +18,7 @@ graph TD
     ORG --> FST["📁 stage"]
     ORG --> FP["📁 prod"]
 
-    FS --> PM["📦 t-labs-management<br/>us-central1<br/>─────────────────<br/>Artifact Registry<br/>Terraform State Buckets<br/>Terraform Service Account"]
+    FS --> PM["📦 t-labs-shared<br/>us-central1<br/>─────────────────<br/>Artifact Registry<br/>Terraform State Buckets<br/>Terraform Service Account"]
 
     FD --> PD["📦 t-labs-dev<br/>us-central1<br/>─────────────────<br/>VPC · GKE · Cloud SQL"]
     FST --> PST["📦 t-labs-stage<br/>us-east4<br/>─────────────────<br/>VPC · GKE · Cloud SQL"]
@@ -65,7 +65,7 @@ graph LR
     IG -->|"roles/editor"| FST
     IG -->|"roles/editor"| FP
 
-    TF["🤖 Terraform SA<br/>terraform@t-labs-management<br/>CI/CD only"]
+    TF["🤖 Terraform SA<br/>terraform@t-labs-shared<br/>CI/CD only"]
     TF -->|"roles/owner"| FD
     TF -->|"roles/owner"| FST
     TF -->|"roles/owner"| FP
@@ -138,8 +138,8 @@ Private subnets have no public IPs. Outbound internet access goes through Cloud 
 
 ```mermaid
 graph TD
-    subgraph MGMT["t-labs-management project"]
-        AR["📦 Artifact Registry<br/>us-central1-docker.pkg.dev/t-labs-management/t-labs<br/>Single source of truth for all container images"]
+    subgraph MGMT["t-labs-shared project"]
+        AR["📦 Artifact Registry<br/>us-central1-docker.pkg.dev/t-labs-shared/t-labs<br/>Single source of truth for all container images"]
         SB["🪣 State Buckets<br/>t-labs-state-{bootstrap,dev,stage,prod}"]
     end
 
@@ -197,7 +197,7 @@ t-labs/
 ├── bootstrap/                  # Run once — provisions org, projects, state buckets, IAM
 │   ├── main.tf                 # Org folders + projects + API enablement
 │   ├── gcs.tf                  # 4 state buckets (one per env)
-│   ├── artifact_registry.tf    # Shared Docker registry in management project
+│   ├── artifact_registry.tf    # Shared Docker registry in shared project
 │   ├── iam.tf                  # Terraform SA + Google Group IAM bindings
 │   ├── providers.tf
 │   ├── variables.tf
@@ -300,8 +300,8 @@ kubectl get nodes
 ```bash
 gcloud auth configure-docker us-central1-docker.pkg.dev
 
-docker tag myapp us-central1-docker.pkg.dev/t-labs-management/t-labs/myapp:latest
-docker push us-central1-docker.pkg.dev/t-labs-management/t-labs/myapp:latest
+docker tag myapp us-central1-docker.pkg.dev/t-labs-shared/t-labs/myapp:latest
+docker push us-central1-docker.pkg.dev/t-labs-shared/t-labs/myapp:latest
 ```
 
 ---

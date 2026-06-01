@@ -58,7 +58,7 @@ module "cloudsql" {
 
 # Allow GKE nodes to pull images from the shared Artifact Registry
 resource "google_artifact_registry_repository_iam_member" "gke_nodes_ar_reader" {
-  project    = var.management_project_id
+  project    = var.shared_project_id
   location   = var.artifact_registry_location
   repository = var.artifact_registry_name
   role       = "roles/artifactregistry.reader"

@@ -20,6 +20,12 @@ variable "region" {
   default     = "us-central1"
 }
 
+variable "env_project_suffix" {
+  description = "Optional suffix appended to env project IDs (e.g. '-2'). Leave empty for new orgs; set when IDs are reserved from a prior deletion."
+  type        = string
+  default     = ""
+}
+
 variable "developer_group_email" {
   description = "Google Workspace group email for developers (e.g. developers@t-labs.com) — create in admin.google.com"
   type        = string

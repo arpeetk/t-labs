@@ -1,5 +1,5 @@
-output "management_project_id" {
-  value = google_project.management.project_id
+output "shared_project_id" {
+  value = google_project.shared.project_id
 }
 
 output "dev_project_id" {
