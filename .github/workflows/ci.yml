@@ -4,10 +4,10 @@ on:
   pull_request:
     branches: [main]
 
+# Workflow-level: read-only. pull-requests: write is scoped to tf-plan only.
 permissions:
   contents: read
   id-token: write      # WIF token exchange
-  pull-requests: write  # post plan comment
 
 env:
   TF_VERSION: "~> 1.8"
@@ -78,6 +78,11 @@ jobs:
     runs-on: ubuntu-latest
     needs: tf-validate
     environment: dev
+    # Narrowed permission: only this job needs to write PR comments.
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: write
     defaults:
       run:
         working-directory: environments/dev
@@ -92,11 +97,11 @@ jobs:
           token_format: access_token
 
       - name: Export SA token for Terraform
+        env:
+          ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
         run: |
-          echo "GOOGLE_OAUTH_ACCESS_TOKEN=${{ steps.auth.outputs.access_token }}" >> "$GITHUB_ENV"
-          # Clear user-project env vars set by the auth action; without these, Terraform
-          # sends API calls without an X-Goog-User-Project override so each API is
-          # checked against the resource's own project, not t-labs-shared.
+          echo "::add-mask::${ACCESS_TOKEN}"
+          echo "GOOGLE_OAUTH_ACCESS_TOKEN=${ACCESS_TOKEN}" >> "$GITHUB_ENV"
           printf 'GOOGLE_CLOUD_PROJECT=\nCLOUDSDK_CORE_PROJECT=\nCLOUDSDK_PROJECT=\nGCLOUD_PROJECT=\nGCP_PROJECT=\n' >> "$GITHUB_ENV"
 
       - uses: hashicorp/setup-terraform@v3
@@ -117,12 +122,13 @@ jobs:
         uses: actions/github-script@v7
         env:
           PLAN_FILE: ${{ github.workspace }}/environments/dev/plan.txt
+          PLAN_EXIT_CODE: ${{ steps.plan.outputs.exit_code }}
         with:
           script: |
             const fs = require('fs');
             const raw  = fs.readFileSync(process.env.PLAN_FILE, 'utf8');
             const plan = raw.length > 60000 ? raw.slice(0, 60000) + '\n…(truncated)' : raw;
-            const status = '${{ steps.plan.outputs.exit_code }}' === '0' ? '✅' : '❌';
+            const status = process.env.PLAN_EXIT_CODE === '0' ? '✅' : '❌';
             const body = [
               `### ${status} Terraform Plan — dev`,
               '<details><summary>Show plan output</summary>',
@@ -133,11 +139,12 @@ jobs:
               '</details>',
             ].join('\n');
 
-            // Replace previous bot plan comment if present
+            // Replace previous bot plan comment if present (fetch up to 100 to handle busy PRs).
             const existing = await github.rest.issues.listComments({
               owner: context.repo.owner,
               repo:  context.repo.repo,
               issue_number: context.issue.number,
+              per_page: 100,
             });
             for (const c of existing.data) {
               if (c.user.type === 'Bot' && c.body.includes('Terraform Plan — dev')) {

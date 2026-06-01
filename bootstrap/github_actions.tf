@@ -40,7 +40,19 @@ resource "google_service_account_iam_member" "github_wif" {
   member             = "principalSet://iam.googleapis.com/${google_iam_workload_identity_pool.github.name}/attribute.repository/arpeetk/t-labs"
 }
 
+# Allow GitHub Actions tokens to impersonate the image-pusher SA.
+resource "google_service_account_iam_member" "github_wif_image_pusher" {
+  service_account_id = google_service_account.ci_image_pusher.name
+  role               = "roles/iam.workloadIdentityUser"
+  member             = "principalSet://iam.googleapis.com/${google_iam_workload_identity_pool.github.name}/attribute.repository/arpeetk/t-labs"
+}
+
 output "workload_identity_provider" {
   description = "Full provider resource name — set as WIF_PROVIDER GitHub secret."
   value       = google_iam_workload_identity_pool_provider.github.name
+}
+
+output "image_pusher_sa_email" {
+  description = "SA for Docker image pushes — set as IMAGES_SA_EMAIL GitHub secret."
+  value       = google_service_account.ci_image_pusher.email
 }

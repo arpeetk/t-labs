@@ -1,8 +1,8 @@
 name: CD — Terraform
 
 # Applies Terraform automatically for dev on every merge to main when
-# infrastructure files change. Stage and prod require a manual workflow dispatch
-# so that applies are always intentional and reviewed.
+# dev or shared module files change. Stage and prod require a manual
+# workflow dispatch so that applies are always intentional and reviewed.
 
 on:
   push:
@@ -10,8 +10,6 @@ on:
     paths:
       - 'modules/**'
       - 'environments/dev/**'
-      - 'environments/stage/**'
-      - 'environments/prod/**'
   workflow_dispatch:
     inputs:
       environment:
@@ -33,6 +31,9 @@ jobs:
     name: Apply — dev
     runs-on: ubuntu-latest
     environment: dev
+    concurrency:
+      group: terraform-apply-dev
+      cancel-in-progress: false
     if: |
       github.event_name == 'push' ||
       (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'dev')
@@ -50,8 +51,11 @@ jobs:
           token_format: access_token
 
       - name: Export SA token for Terraform
+        env:
+          ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
         run: |
-          echo "GOOGLE_OAUTH_ACCESS_TOKEN=${{ steps.auth.outputs.access_token }}" >> "$GITHUB_ENV"
+          echo "::add-mask::${ACCESS_TOKEN}"
+          echo "GOOGLE_OAUTH_ACCESS_TOKEN=${ACCESS_TOKEN}" >> "$GITHUB_ENV"
           printf 'GOOGLE_CLOUD_PROJECT=\nCLOUDSDK_CORE_PROJECT=\nCLOUDSDK_PROJECT=\nGCLOUD_PROJECT=\nGCP_PROJECT=\n' >> "$GITHUB_ENV"
 
       - uses: hashicorp/setup-terraform@v3
@@ -59,13 +63,17 @@ jobs:
           terraform_version: ${{ env.TF_VERSION }}
 
       - run: terraform init -backend-config="bucket=t-labs-state-dev"
-      - run: terraform apply -auto-approve -no-color
+      - run: terraform plan -out=tfplan -no-color
+      - run: terraform apply tfplan
 
   # ── Stage: manual dispatch only — requires GitHub environment protection ───
   apply-stage:
     name: Apply — stage
     runs-on: ubuntu-latest
     environment: stage   # configure required reviewers in GitHub repo settings
+    concurrency:
+      group: terraform-apply-stage
+      cancel-in-progress: false
     if: github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'stage'
     defaults:
       run:
@@ -81,8 +89,11 @@ jobs:
           token_format: access_token
 
       - name: Export SA token for Terraform
+        env:
+          ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
         run: |
-          echo "GOOGLE_OAUTH_ACCESS_TOKEN=${{ steps.auth.outputs.access_token }}" >> "$GITHUB_ENV"
+          echo "::add-mask::${ACCESS_TOKEN}"
+          echo "GOOGLE_OAUTH_ACCESS_TOKEN=${ACCESS_TOKEN}" >> "$GITHUB_ENV"
           printf 'GOOGLE_CLOUD_PROJECT=\nCLOUDSDK_CORE_PROJECT=\nCLOUDSDK_PROJECT=\nGCLOUD_PROJECT=\nGCP_PROJECT=\n' >> "$GITHUB_ENV"
 
       - uses: hashicorp/setup-terraform@v3
@@ -90,13 +101,17 @@ jobs:
           terraform_version: ${{ env.TF_VERSION }}
 
       - run: terraform init -backend-config="bucket=t-labs-state-stage"
-      - run: terraform apply -auto-approve -no-color
+      - run: terraform plan -out=tfplan -no-color
+      - run: terraform apply tfplan
 
   # ── Prod: manual dispatch only — requires GitHub environment protection ─────
   apply-prod:
     name: Apply — prod
     runs-on: ubuntu-latest
     environment: prod    # configure required reviewers + deployment branches in GitHub repo settings
+    concurrency:
+      group: terraform-apply-prod
+      cancel-in-progress: false
     if: github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'prod'
     defaults:
       run:
@@ -112,8 +127,11 @@ jobs:
           token_format: access_token
 
       - name: Export SA token for Terraform
+        env:
+          ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
         run: |
-          echo "GOOGLE_OAUTH_ACCESS_TOKEN=${{ steps.auth.outputs.access_token }}" >> "$GITHUB_ENV"
+          echo "::add-mask::${ACCESS_TOKEN}"
+          echo "GOOGLE_OAUTH_ACCESS_TOKEN=${ACCESS_TOKEN}" >> "$GITHUB_ENV"
           printf 'GOOGLE_CLOUD_PROJECT=\nCLOUDSDK_CORE_PROJECT=\nCLOUDSDK_PROJECT=\nGCLOUD_PROJECT=\nGCP_PROJECT=\n' >> "$GITHUB_ENV"
 
       - uses: hashicorp/setup-terraform@v3
@@ -121,4 +139,5 @@ jobs:
           terraform_version: ${{ env.TF_VERSION }}
 
       - run: terraform init -backend-config="bucket=t-labs-state-prod"
-      - run: terraform apply -auto-approve -no-color
+      - run: terraform plan -out=tfplan -no-color
+      - run: terraform apply tfplan
