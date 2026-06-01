@@ -4,21 +4,12 @@
 #   WIF_PROVIDER = $(terraform output -raw workload_identity_provider)
 #   TF_SA_EMAIL  = $(terraform output -raw terraform_service_account_email)
 
-resource "google_project_service" "sts" {
-  project                    = google_project.shared.project_id
-  service                    = "sts.googleapis.com"
-  disable_dependent_services = false
-  disable_on_destroy         = false
-
-  depends_on = [google_project_service.shared_apis]
-}
-
 resource "google_iam_workload_identity_pool" "github" {
   project                   = google_project.shared.project_id
   workload_identity_pool_id = "github-actions"
   display_name              = "GitHub Actions"
 
-  depends_on = [google_project_service.sts]
+  depends_on = [google_project_service.shared_apis]
 }
 
 resource "google_iam_workload_identity_pool_provider" "github" {

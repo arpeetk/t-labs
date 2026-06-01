@@ -86,6 +86,17 @@ resource "google_project_service" "shared_apis" {
     "iam.googleapis.com",
     "iamcredentials.googleapis.com",
     "orgpolicy.googleapis.com",
+    "sts.googleapis.com",
+    # The Terraform SA lives in this project; GCP routes quota/billing for
+    # every API call through the SA's home project, so all APIs the SA
+    # touches across env projects must also be enabled here.
+    "compute.googleapis.com",
+    "container.googleapis.com",
+    "sqladmin.googleapis.com",
+    "servicenetworking.googleapis.com",
+    "secretmanager.googleapis.com",
+    "logging.googleapis.com",
+    "monitoring.googleapis.com",
   ])
 
   project                    = google_project.shared.project_id
