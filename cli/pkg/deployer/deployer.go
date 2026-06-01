@@ -315,6 +315,7 @@ spec:
           args:
             - "--structured-logs"
             - "--port=5432"
+            - "--private-ip"
             - "{{ .Connect.CloudSQL }}"
           resources:
             requests:
