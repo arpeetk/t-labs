@@ -118,6 +118,16 @@ resource "google_artifact_registry_repository_iam_member" "terraform_env_ar_admi
   member     = "serviceAccount:${each.value.email}"
 }
 
+# Cross-project IAM reads (e.g. getIamPolicy on AR repo in shared) go through
+# the IAM v1 API which requires iam.policies.get, not the AR-specific permission.
+# securityReviewer on the shared project satisfies this without data access.
+resource "google_project_iam_member" "terraform_env_shared_iam_reviewer" {
+  for_each = google_service_account.terraform_env
+  project  = google_project.shared.project_id
+  role     = "roles/iam.securityReviewer"
+  member   = "serviceAccount:${each.value.email}"
+}
+
 # Each env SA writes only to its own state bucket.
 resource "google_storage_bucket_iam_member" "terraform_env_state_admin" {
   for_each = google_service_account.terraform_env
