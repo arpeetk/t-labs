@@ -143,7 +143,9 @@ jobs:
           service_account: ${{ secrets.TF_SA_EMAIL_DEV }}
 
       - name: Install gke-gcloud-auth-plugin
-        run: sudo apt-get install -y google-cloud-sdk-gke-gcloud-auth-plugin
+        run: |
+          sudo apt-get update -y -qq
+          sudo apt-get install -y google-cloud-cli-gke-gcloud-auth-plugin
 
       - name: Deploy hello-world
         if: needs.build-hello-world.result == 'success'
