@@ -1,5 +1,4 @@
 FROM golang:1.22-alpine AS build
-# Build stage: compile the Go binary statically.
 WORKDIR /src
 COPY go.mod go.sum* ./
 RUN go mod download
