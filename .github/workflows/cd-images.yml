@@ -142,11 +142,8 @@ jobs:
           workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
           service_account: ${{ secrets.TF_SA_EMAIL_DEV }}
 
-      - uses: google-github-actions/get-gke-credentials@3da1e46a907576cefaa90c484278bb5b259dd395 # v3.0.0
-        with:
-          cluster_name: t-labs-dev-gke
-          location: us-central1
-          project_id: t-labs-dev-2
+      - name: Install gke-gcloud-auth-plugin
+        run: sudo apt-get install -y google-cloud-sdk-gke-gcloud-auth-plugin
 
       - name: Deploy hello-world
         if: needs.build-hello-world.result == 'success'
