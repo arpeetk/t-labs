@@ -158,6 +158,14 @@ resource "google_storage_bucket_iam_member" "terraform_plan_state_reader" {
   member   = "serviceAccount:${google_service_account.terraform_plan_ro.email}"
 }
 
+# The dev env plan reads cross-project IAM (Artifact Registry in t-labs-shared).
+# securityReviewer on the shared project grants getIamPolicy without data access.
+resource "google_project_iam_member" "terraform_plan_shared_iam_reviewer" {
+  project = google_project.shared.project_id
+  role    = "roles/iam.securityReviewer"
+  member  = "serviceAccount:${google_service_account.terraform_plan_ro.email}"
+}
+
 # ── Developer role bindings ──────────────────────────────────────────────────
 # Google Workspace group — add/remove users in admin.google.com, IAM updates automatically.
 # Developers get viewer + GKE deploy on dev and stage only — no prod access.
