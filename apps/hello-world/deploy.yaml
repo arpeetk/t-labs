@@ -14,6 +14,10 @@ service:
   type: public
   port: 8080
 
+health:
+  path: /health
+  port: 8080
+
 env:
   - name: ENV
     value: "dev"

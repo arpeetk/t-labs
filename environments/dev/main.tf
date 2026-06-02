@@ -32,6 +32,7 @@ module "gke" {
 
   master_cidr                = "172.16.0.0/28"
   master_authorized_networks = var.master_authorized_networks
+  enable_private_endpoint    = false
   node_zones                 = local.node_zones
   machine_type               = var.gke_machine_type
   min_node_count             = var.gke_min_nodes
@@ -42,14 +43,16 @@ module "gke" {
 module "cloudsql" {
   source = "../../modules/cloudsql"
 
-  name                = local.prefix
-  project_id          = var.project_id
-  region              = var.region
-  vpc_id              = module.vpc.vpc_id
-  database_name       = "appdb"
-  db_user             = "appuser"
-  tier                = var.cloudsql_tier
-  deletion_protection = false
+  name                           = local.prefix
+  project_id                     = var.project_id
+  region                         = var.region
+  vpc_id                         = module.vpc.vpc_id
+  database_name                  = "appdb"
+  db_user                        = "appuser"
+  tier                           = var.cloudsql_tier
+  deletion_protection            = false
+  backup_retention_days          = var.backup_retention_days
+  transaction_log_retention_days = var.transaction_log_retention_days
 
   depends_on = [module.vpc]
 }
@@ -65,7 +68,9 @@ resource "google_artifact_registry_repository_iam_member" "gke_nodes_ar_reader" 
   member     = "serviceAccount:${module.gke.node_service_account_email}"
 }
 
-# Allow GKE nodes to use Cloud SQL Auth Proxy (apps still need DB credentials)
+# roles/cloudsql.client is kept on the node SA so apps that want to use the
+# Cloud SQL Auth Proxy sidecar (instead of the direct private IP path documented
+# in CLAUDE.md) can do so without further IAM changes.
 resource "google_project_iam_member" "gke_nodes_cloudsql_client" {
   project = var.project_id
   role    = "roles/cloudsql.client"

@@ -103,10 +103,25 @@ resource "google_service_networking_connection" "private_services" {
 }
 
 # ── Firewall rules ────────────────────────────────────────────────────────────
+#
+# Default-deny ingress is implicit on every GCP VPC. The rules below explicitly
+# allow the minimum we need:
+#   - allow_internal_gke   : pod-to-pod, node-to-node, node-to-pod, pod-to-node
+#                            on TCP/UDP/ICMP. Required for Dataplane V2 to do
+#                            its job. Network policy (Cilium) is the next layer
+#                            in for fine-grained pod isolation.
+#   - allow_health_checks  : GCP LB health probers (well-known ranges).
+#   - allow_iap_ssh        : IAP TCP forwarding for diagnostic SSH to nodes.
+#
+# The data subnet has no resources today (Cloud SQL is in the peered Google
+# VPC reached via PSA). Anything added there should declare its own
+# tightly-scoped rule (e.g. allow TCP 5432 from var.pods_cidr only). The
+# previous catch-all "allow_internal" included the data range as both source
+# and destination, which would have allowed unintended lateral movement once
+# the subnet is populated.
 
-# Allow traffic between all subnets and pod IPs
-resource "google_compute_firewall" "allow_internal" {
-  name    = "${var.name}-allow-internal"
+resource "google_compute_firewall" "allow_internal_gke" {
+  name    = "${var.name}-allow-internal-gke"
   project = var.project_id
   network = google_compute_network.vpc.id
 
@@ -115,9 +130,7 @@ resource "google_compute_firewall" "allow_internal" {
   allow { protocol = "icmp" }
 
   source_ranges = [
-    var.public_subnet_cidr,
     var.private_gke_subnet_cidr,
-    var.private_data_subnet_cidr,
     var.pods_cidr,
   ]
 }

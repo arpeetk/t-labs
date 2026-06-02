@@ -32,6 +32,7 @@ module "gke" {
 
   master_cidr                = "172.16.1.0/28"
   master_authorized_networks = var.master_authorized_networks
+  enable_private_endpoint    = false
   node_zones                 = local.node_zones
   machine_type               = var.gke_machine_type
   min_node_count             = var.gke_min_nodes
@@ -42,14 +43,16 @@ module "gke" {
 module "cloudsql" {
   source = "../../modules/cloudsql"
 
-  name                = local.prefix
-  project_id          = var.project_id
-  region              = var.region
-  vpc_id              = module.vpc.vpc_id
-  database_name       = "appdb"
-  db_user             = "appuser"
-  tier                = var.cloudsql_tier
-  deletion_protection = false
+  name                           = local.prefix
+  project_id                     = var.project_id
+  region                         = var.region
+  vpc_id                         = module.vpc.vpc_id
+  database_name                  = "appdb"
+  db_user                        = "appuser"
+  tier                           = var.cloudsql_tier
+  deletion_protection            = false
+  backup_retention_days          = var.backup_retention_days
+  transaction_log_retention_days = var.transaction_log_retention_days
 
   depends_on = [module.vpc]
 }

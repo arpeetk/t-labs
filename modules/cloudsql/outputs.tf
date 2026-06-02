@@ -23,3 +23,8 @@ output "db_password_secret_id" {
   description = "Secret Manager secret ID — grant roles/secretmanager.secretAccessor to app Workload Identity SAs"
   value       = google_secret_manager_secret.db_password.secret_id
 }
+
+output "db_connection_secret_id" {
+  description = "Secret Manager secret ID — JSON blob with host/port/db_name/db_user. Apps wire DB_HOST/DB_NAME from this instead of hardcoding."
+  value       = google_secret_manager_secret.db_connection.secret_id
+}
