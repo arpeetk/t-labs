@@ -660,3 +660,79 @@ cd environments/dev && terraform destroy
 - **Non-overlapping VPC CIDRs** — dev `10.0.x`, stage `10.10.x`, prod `10.20.x`; safe to peer in future without renumbering
 - **Single shared Artifact Registry** — images are built and pushed once, then promoted across environments by referencing the same digest; no per-env image rebuilds
 - **Separate GCS state bucket per environment** — prod state is inaccessible to developers; destroying one bucket cannot affect other environments' state
+
+---
+
+## Future Work
+
+### Multi-Geography Architecture
+
+The platform is currently single-region per environment. The planned multi-geo expansion targets both stage and prod — stage mirrors the prod topology so failover procedures and cross-region code paths can be exercised before they are ever needed in production.
+
+#### Target topology
+
+```
+Geography: US
+  us-west1   — GKE cluster · Cloud SQL primary (writes)
+  us-east1   — GKE cluster · Cloud SQL cross-region read replica (reads + DR failover)
+
+Geography: EU
+  europe-west1  — GKE cluster · Cloud SQL primary (writes)
+  europe-west4  — GKE cluster · Cloud SQL cross-region read replica (reads + DR failover)
+
+Global HTTPS Load Balancer
+  US traffic  → us-west1 or us-east1 (nearest healthy backend)
+  EU traffic  → europe-west1 or europe-west4 (nearest healthy backend)
+```
+
+Stage gets the same four-region structure. Dev stays single-region.
+
+#### Data model
+
+- **No cross-geography reads or writes.** Each geography is a fully independent data silo. US users are assigned a US home region at signup; EU users are assigned an EU home region. Writes always go to the home-region primary. This satisfies data residency requirements (GDPR) without application-level sharding logic beyond the initial home-region assignment.
+- **Within a geography, cross-region reads are permitted.** The secondary region's read replica serves reads for latency and acts as the DR target if the primary region fails. Applications must handle read-after-write consistency — either by routing reads to the primary for a short window after a write, or by routing all transactional reads to the primary and reserving the replica for analytics and reporting.
+
+#### GCP project structure
+
+One GCP project per geography (not per region) for prod and stage:
+
+| Project | Regions | Purpose |
+|---------|---------|---------|
+| `t-labs-prod-us` | us-west1, us-east1 | US production |
+| `t-labs-prod-eu` | europe-west1, europe-west4 | EU production |
+| `t-labs-stage-us` | us-west1, us-east1 | US staging |
+| `t-labs-stage-eu` | europe-west1, europe-west4 | EU staging |
+
+Per-geography projects enable org policies that restrict resource creation to the geography's regions — making accidental data residency violations impossible rather than just against policy.
+
+#### Terraform changes
+
+```
+environments/
+  dev/                    # unchanged — single region
+  stage/
+    us-primary/           # us-west1   · GKE + Cloud SQL primary
+    us-secondary/         # us-east1   · GKE + Cloud SQL read replica
+    eu-primary/           # europe-west1  · GKE + Cloud SQL primary
+    eu-secondary/         # europe-west4  · GKE + Cloud SQL read replica
+    global/               # Global HTTPS LB + geo routing policies
+  prod/
+    us-primary/           # same structure as stage
+    us-secondary/
+    eu-primary/
+    eu-secondary/
+    global/
+
+modules/
+  vpc/                    # unchanged
+  gke/                    # unchanged
+  cloudsql/               # unchanged (used by primary regions)
+  cloudsql-replica/       # new — cross-region read replica, no password generation
+  global-lb/              # new — Global HTTPS LB, backend services, geo routing URL map
+```
+
+Each regional environment gets its own GCS state bucket. The `global/` environment is always applied last — it reads NEG IDs and backend service names from the regional environment outputs.
+
+#### CD pipeline changes
+
+The `cd-terraform.yml` `workflow_dispatch` environment list expands to cover all regional and global environments. Apply order is enforced by running regional environments before `global/`. The CI `tf-plan` job would be extended to plan all active environments (or scoped by paths-filter to only plan changed ones).
