@@ -167,12 +167,12 @@ graph TD
         t-labs-state-{bootstrap · dev · stage · prod}"]
     end
 
-    subgraph LOCAL["Engineer's machine"]
+    subgraph LOCAL["CD Pipeline (dev · auto) · Engineer's machine (stage · prod · manual)"]
         MF["📄 deploy.yaml
         name · image · resources
         service · env · secrets · iam"]
         TLD["⚙️ tld CLI
-        tld deploy -f deploy.yaml"]
+        auto-run by CD on merge to main · or run manually"]
         MF --> TLD
     end
 
@@ -271,7 +271,11 @@ flowchart TD
         only if apps/hello-world/** changed"]
         BAS["Build · push — api-service
         only if apps/api-service/** changed"]
+        DEP_DEV["Deploy — dev
+        environment: dev-apps · no approval
+        tld deploy for each changed app"]
         DETECT --> BHW & BAS
+        BHW & BAS --> DEP_DEV
     end
 
     subgraph TF_SEC["tf-security.yml — on: push to main · schedule: weekly"]
@@ -302,6 +306,7 @@ flowchart TD
     CI -->|"WIF + plan-ro SA"| AUTH
     CD_TF -->|"WIF + per-env SA"| AUTH
     CD_IMG -->|"WIF + image-pusher SA"| AUTH
+    DEP_DEV -->|"WIF + terraform-dev SA"| AUTH
     BHW & BAS -->|"docker push"| AR
 
     style PR    fill:#e8f0fe,stroke:#4285F4
@@ -310,6 +315,7 @@ flowchart TD
     style AD          fill:#e6f4ea,stroke:#34a853
     style AST         fill:#fff8e1,stroke:#fbbc04
     style AP          fill:#fce8e6,stroke:#ea4335
+    style DEP_DEV     fill:#e6f4ea,stroke:#34a853
     style TFENV fill:#4285F4,color:#fff,stroke:none
     style TFRO  fill:#9aa0a6,color:#fff,stroke:none
     style IMGSA fill:#34a853,color:#fff,stroke:none
@@ -323,7 +329,7 @@ flowchart TD
 |----------|---------|--------------|
 | `ci.yml` | Pull request to `main` | Builds and tests the CLI; checks Terraform formatting; validates all three environments; runs `terraform plan -lock=false` on dev using the read-only plan SA; runs Trivy config scan |
 | `cd-terraform.yml` | Push to `main` (paths: `modules/**`, `environments/dev/**`, `bootstrap/github_actions.tf`) | Runs plan-dev automatically (no approval), uploads the plan artifact; apply-dev downloads and applies the exact same artifact after a reviewer approves the GitHub `dev` environment; stage and prod require a manual `workflow_dispatch` and pass through GitHub environment protection rules |
-| `cd-images.yml` | Push to `main` (paths: `apps/**`) | Detects which apps changed; rebuilds and pushes only those images — tagged `:latest` and `:<sha>` |
+| `cd-images.yml` | Push to `main` (paths: `apps/**`) | Detects which apps changed; rebuilds and pushes only those images — tagged `:latest` and `:<sha>`; then auto-deploys each changed app to dev using `tld` (gated by the `dev-apps` GitHub environment; no required reviewers) |
 | `tf-security.yml` | Push to `main`; weekly schedule | Trivy config scan across the full repo (HIGH + CRITICAL); results uploaded as SARIF to GitHub Security |
 
 **Security decisions**
@@ -333,6 +339,7 @@ flowchart TD
 - **Separate plan and apply GitHub Environments** — the plan runs automatically (no approval gate); the apply is gated by required reviewers in the `dev` GitHub Environment; the apply downloads the exact plan artifact the reviewer approved and cannot diverge if state changes between steps
 - **Read-only plan SA for PRs** — `terraform-plan-ro` has `roles/viewer` + `roles/iam.securityReviewer` only; a malicious PR that exfiltrates the token can list resources but cannot mutate anything
 - **Least-privilege image SA** — `ci-image-pusher` has only `roles/artifactregistry.writer`; a compromised Docker build context cannot escalate to infrastructure
+- **Scoped deploy SA** — the CD deploy job impersonates `terraform-dev` (not the image-pusher SA), which has `container.admin` and `iam.serviceAccountAdmin` scoped to `t-labs-dev-2` only; it cannot affect stage or prod
 - **Trivy config scanning** — HIGH and CRITICAL findings in IaC files block the CI run; results are uploaded to GitHub Security as SARIF for persistent visibility
 - **Dependabot** — weekly PRs for Go module and GitHub Actions SHA upgrades keep the dependency footprint current
 - **CODEOWNERS** — `CODEOWNERS` file gates all infrastructure changes on a review from the infra-admin team
@@ -343,6 +350,8 @@ flowchart TD
 ## The `tld` CLI
 
 `tld` translates a YAML manifest into GKE deployments. Engineers describe what their service needs; `tld` handles namespaces, GCP service accounts, Workload Identity, secret injection, and rollout waiting.
+
+`cd-images.yml` runs `tld` automatically after every successful image build — merging app changes to `main` is all that's needed to deploy to dev. The same CLI is used directly for manual deployments to stage and prod.
 
 ### Install
 
@@ -588,9 +597,10 @@ make install    # installs tld to /usr/local/bin
 
 ### 6. Deploy a service
 
+Dev deployments happen automatically — merging app changes to `main` triggers `cd-images.yml`, which builds the image and runs `tld deploy` without any manual step. To deploy manually (or to stage/prod):
+
 ```bash
 export TLD_DEV_PROJECT=t-labs-dev-2
-export USE_GKE_GCLOUD_AUTH_PLUGIN=True
 
 tld deploy -f apps/hello-world/deploy.yaml
 tld status -f apps/hello-world/deploy.yaml
