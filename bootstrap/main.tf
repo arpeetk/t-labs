@@ -100,6 +100,7 @@ resource "google_project_service" "shared_apis" {
     "secretmanager.googleapis.com",
     "logging.googleapis.com",
     "monitoring.googleapis.com",
+    "cloudkms.googleapis.com",
   ])
 
   project                    = google_project.shared.project_id
