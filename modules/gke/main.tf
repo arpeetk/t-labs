@@ -203,6 +203,10 @@ resource "google_container_node_pool" "main" {
     service_account = google_service_account.gke_nodes.email
     oauth_scopes    = ["https://www.googleapis.com/auth/cloud-platform"]
 
+    metadata = {
+      disable-legacy-endpoints = "true"
+    }
+
     # Required for Workload Identity on nodes
     workload_metadata_config {
       mode = "GKE_METADATA"
