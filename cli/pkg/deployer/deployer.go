@@ -278,6 +278,14 @@ type templateData struct {
 	HasSecrets bool
 	HasGSA     bool
 	WantPDB    bool
+	PullPolicy string
+}
+
+func imagePullPolicy(image string) string {
+	if strings.HasSuffix(image, ":latest") || !strings.Contains(image, ":") {
+		return "Always"
+	}
+	return "IfNotPresent"
 }
 
 func (d *Deployer) renderManifests() (string, error) {
@@ -287,6 +295,7 @@ func (d *Deployer) renderManifests() (string, error) {
 		HasSecrets: len(d.mf.Secrets) > 0,
 		HasGSA:     d.mf.NeedsGCPServiceAccount(),
 		WantPDB:    d.mf.Replicas > 1,
+		PullPolicy: imagePullPolicy(d.mf.Image),
 	}
 
 	tmpl, err := template.New("manifests").Funcs(template.FuncMap{
@@ -367,7 +376,7 @@ spec:
       containers:
         - name: {{ $name }}
           image: {{ .Image }}
-          imagePullPolicy: IfNotPresent
+          imagePullPolicy: {{ .PullPolicy }}
           ports:
             - containerPort: {{ .Service.Port }}
           securityContext:
