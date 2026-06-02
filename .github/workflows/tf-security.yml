@@ -60,19 +60,22 @@ jobs:
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
+      - name: Install Trivy
+        run: |
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh \
+            | sh -s -- -b /usr/local/bin v0.62.1
+
       - name: Trivy config scan
-        uses: aquasecurity/trivy-action@18f2510ee396bbf400402947b394f2dd8c87dbb0 # 0.29.0
-        with:
-          scan-type: config
-          scan-ref: .
-          format: sarif
-          output: trivy-results.sarif
-          severity: HIGH,CRITICAL
-          # Keep the gate strict: a HIGH finding fails the build.
-          exit-code: '1'
-          # Skip the example deploy.yaml manifests — they describe deployments
-          # the tld CLI manages at runtime, not infrastructure the repo applies.
-          skip-dirs: 'apps,cli'
+        # Skip app manifests — they describe workloads the tld CLI manages at
+        # runtime, not infrastructure this repo applies.
+        run: |
+          trivy config . \
+            --format sarif \
+            --output trivy-results.sarif \
+            --severity HIGH,CRITICAL \
+            --exit-code 1 \
+            --skip-dirs apps \
+            --skip-dirs cli
 
       - name: Upload SARIF to Security tab
         if: always()

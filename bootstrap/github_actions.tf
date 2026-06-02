@@ -23,12 +23,12 @@ resource "google_iam_workload_identity_pool_provider" "github" {
   }
 
   attribute_mapping = {
-    "google.subject"       = "assertion.sub"
-    "attribute.repository" = "assertion.repository"
-    "attribute.ref"        = "assertion.ref"
-    "attribute.actor"      = "assertion.actor"
+    "google.subject"        = "assertion.sub"
+    "attribute.repository"  = "assertion.repository"
+    "attribute.ref"         = "assertion.ref"
+    "attribute.actor"       = "assertion.actor"
     "attribute.environment" = "assertion.environment"
-    "attribute.event_name" = "assertion.event_name"
+    "attribute.event_name"  = "assertion.event_name"
   }
 
   # Only tokens issued for this specific repository are trusted.
