@@ -7,6 +7,34 @@ locals {
   ]
 }
 
+# KMS for GKE etcd CMEK (see environments/dev/main.tf for the design rationale).
+data "google_project" "current" {
+  project_id = var.project_id
+}
+
+resource "google_kms_key_ring" "gke" {
+  name     = "${local.prefix}-gke"
+  location = var.region
+  project  = var.project_id
+}
+
+resource "google_kms_crypto_key" "gke_etcd" {
+  name            = "etcd"
+  key_ring        = google_kms_key_ring.gke.id
+  purpose         = "ENCRYPT_DECRYPT"
+  rotation_period = "7776000s"
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+resource "google_kms_crypto_key_iam_member" "gke_etcd_robot" {
+  crypto_key_id = google_kms_crypto_key.gke_etcd.id
+  role          = "roles/cloudkms.cryptoKeyEncrypterDecrypter"
+  member        = "serviceAccount:service-${data.google_project.current.number}@container-engine-robot.iam.gserviceaccount.com"
+}
+
 module "vpc" {
   source = "../../modules/vpc"
 
@@ -39,6 +67,9 @@ module "gke" {
   min_node_count               = var.gke_min_nodes
   max_node_count               = var.gke_max_nodes
   deletion_protection          = true
+  database_encryption_key_name = google_kms_crypto_key.gke_etcd.id
+
+  depends_on = [google_kms_crypto_key_iam_member.gke_etcd_robot]
 }
 
 module "cloudsql" {

@@ -8,6 +8,37 @@ resource "google_artifact_registry_repository" "main" {
   format        = "DOCKER"
   description   = "Central Docker repository shared across all environments"
 
+  # Retention so the registry stays small and old vulnerable images get culled.
+  # Order matters: keep-latest is evaluated alongside delete rules; tagged
+  # images are protected for 90 days regardless of count, and untagged images
+  # disappear after 7 days.
+  cleanup_policies {
+    id     = "keep-recent-tags"
+    action = "KEEP"
+    most_recent_versions {
+      package_name_prefixes = []
+      keep_count            = 30
+    }
+  }
+
+  cleanup_policies {
+    id     = "delete-untagged-quickly"
+    action = "DELETE"
+    condition {
+      tag_state  = "UNTAGGED"
+      older_than = "604800s" # 7 days
+    }
+  }
+
+  cleanup_policies {
+    id     = "delete-old-tagged"
+    action = "DELETE"
+    condition {
+      tag_state  = "TAGGED"
+      older_than = "7776000s" # 90 days
+    }
+  }
+
   depends_on = [google_project_service.shared_apis]
 }
 

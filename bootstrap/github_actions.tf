@@ -27,22 +27,54 @@ resource "google_iam_workload_identity_pool_provider" "github" {
     "attribute.repository" = "assertion.repository"
     "attribute.ref"        = "assertion.ref"
     "attribute.actor"      = "assertion.actor"
+    "attribute.environment" = "assertion.environment"
+    "attribute.event_name" = "assertion.event_name"
   }
 
   # Only tokens issued for this specific repository are trusted.
   attribute_condition = "assertion.repository == 'arpeetk/t-labs'"
 }
 
-# Allow GitHub Actions tokens from this repo to impersonate the Terraform SA.
-resource "google_service_account_iam_member" "github_wif" {
-  service_account_id = google_service_account.terraform.name
+# ── WIF principal bindings ─────────────────────────────────────────────────
+#
+# Each binding answers: "which subset of GitHub Actions jobs can impersonate
+# this SA?" The narrower the principalSet, the smaller the blast radius.
+#
+#   terraform-{env} : only jobs that opt into GitHub Environment <env>. The
+#                     environment gate also enforces required reviewers.
+#   terraform-plan-ro : only pull_request events. PR authors can run plan
+#                       but the SA has no write permissions to begin with.
+#   ci-image-pusher : push events (no PRs) so a malicious PR cannot push images.
+#   terraform (legacy) : still bound to the whole repo for backward compat,
+#                        deleted after Phase D migrates the workflows.
+
+# Per-env Terraform SAs — tied to GitHub Environment claim.
+resource "google_service_account_iam_member" "github_wif_terraform_env" {
+  for_each = google_service_account.terraform_env
+
+  service_account_id = each.value.name
   role               = "roles/iam.workloadIdentityUser"
-  member             = "principalSet://iam.googleapis.com/${google_iam_workload_identity_pool.github.name}/attribute.repository/arpeetk/t-labs"
+  member             = "principalSet://iam.googleapis.com/${google_iam_workload_identity_pool.github.name}/attribute.environment/${each.key}"
 }
 
-# Allow GitHub Actions tokens to impersonate the image-pusher SA.
+# Plan-only SA — tied to pull_request events.
+resource "google_service_account_iam_member" "github_wif_terraform_plan_ro" {
+  service_account_id = google_service_account.terraform_plan_ro.name
+  role               = "roles/iam.workloadIdentityUser"
+  member             = "principalSet://iam.googleapis.com/${google_iam_workload_identity_pool.github.name}/attribute.event_name/pull_request"
+}
+
+# Image push SA — tied to push events only, blocking misuse via PR workflows.
 resource "google_service_account_iam_member" "github_wif_image_pusher" {
   service_account_id = google_service_account.ci_image_pusher.name
+  role               = "roles/iam.workloadIdentityUser"
+  member             = "principalSet://iam.googleapis.com/${google_iam_workload_identity_pool.github.name}/attribute.event_name/push"
+}
+
+# Legacy: the original cross-repo binding for the catch-all terraform SA.
+# Removed once Phase D ships and no workflow references TF_SA_EMAIL.
+resource "google_service_account_iam_member" "github_wif" {
+  service_account_id = google_service_account.terraform.name
   role               = "roles/iam.workloadIdentityUser"
   member             = "principalSet://iam.googleapis.com/${google_iam_workload_identity_pool.github.name}/attribute.repository/arpeetk/t-labs"
 }
@@ -55,4 +87,14 @@ output "workload_identity_provider" {
 output "image_pusher_sa_email" {
   description = "SA for Docker image pushes — set as IMAGES_SA_EMAIL GitHub secret."
   value       = google_service_account.ci_image_pusher.email
+}
+
+output "terraform_env_sa_emails" {
+  description = "Per-env Terraform SA emails — set as TF_SA_EMAIL_DEV / _STAGE / _PROD GitHub secrets."
+  value       = { for k, v in google_service_account.terraform_env : k => v.email }
+}
+
+output "terraform_plan_ro_sa_email" {
+  description = "Read-only SA for the PR plan job — set as TF_SA_EMAIL_PLAN GitHub secret."
+  value       = google_service_account.terraform_plan_ro.email
 }

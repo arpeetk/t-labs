@@ -16,6 +16,10 @@ resource "google_storage_bucket" "state" {
   force_destroy               = false
   uniform_bucket_level_access = true
 
+  # Blocks any future IAM binding that would make the bucket world-readable.
+  # Mutable, so safe to enable on existing buckets.
+  public_access_prevention = "enforced"
+
   versioning {
     enabled = true
   }
@@ -30,6 +34,20 @@ resource "google_storage_bucket" "state" {
     }
   }
 
+  # Multi-region durability is documented as future work — moving from
+  # us-central1 to "US" requires destroying and recreating each bucket
+  # and migrating live state, which we punt to a controlled migration
+  # window (README → Future Work).
+  #
+  # State-bucket access logging:
+  # The legacy "GCS access logs" feature requires granting writer to
+  # cloud-storage-analytics@google.com, which the org policy
+  # iam.allowedPolicyMemberDomains rejects. The same data is available via
+  # Cloud Audit Logs (ADMIN_READ is captured for storage by the org-level
+  # google_organization_iam_audit_config) and is queryable in Log Explorer
+  # with: resource.type="gcs_bucket" AND protoPayload.methodName=~"storage".
+  # README → Future Work tracks adding ADMIN_READ to the org-level audit
+  # config to capture read events too.
   depends_on = [google_project_service.shared_apis]
 }
 
