@@ -1,8 +1,19 @@
 name: CD — Terraform
 
-# Applies Terraform automatically for dev on every merge to main when
-# dev or shared module files change. Stage and prod require a manual
-# workflow dispatch so that applies are always intentional and reviewed.
+# Plan-then-apply for each environment.
+#
+# Plan jobs use the GitHub environment "<env>-plan" which carries NO required
+# reviewers; they run immediately and publish their tfplan artifact + a
+# human-readable summary to the workflow run.
+#
+# Apply jobs use the GitHub environment "<env>" which carries required
+# reviewers (configured in repo settings). The approver reads the plan job's
+# summary, then approves the apply. apply downloads the same tfplan artifact
+# the plan job produced, so the executed change cannot drift from the reviewed
+# plan even if main moves in between.
+#
+# WIF principal bindings (bootstrap/github_actions.tf) limit terraform-<env>
+# SAs to jobs that opt into the matching <env> or <env>-plan environments.
 
 on:
   push:
@@ -10,6 +21,7 @@ on:
     paths:
       - 'modules/**'
       - 'environments/dev/**'
+      - 'bootstrap/github_actions.tf'   # WIF changes need a dev plan rerun
   workflow_dispatch:
     inputs:
       environment:
@@ -26,14 +38,11 @@ env:
   TF_VERSION: "~> 1.8"
 
 jobs:
-  # ── Dev: auto-apply on every merge ────────────────────────────────────────
-  apply-dev:
-    name: Apply — dev
+  # ── dev ────────────────────────────────────────────────────────────────────
+  plan-dev:
+    name: Plan — dev
     runs-on: ubuntu-latest
-    environment: dev
-    concurrency:
-      group: terraform-apply-dev
-      cancel-in-progress: false
+    environment: dev-plan
     if: |
       github.event_name == 'push' ||
       (github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'dev')
@@ -47,7 +56,7 @@ jobs:
         id: auth
         with:
           workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
-          service_account: ${{ secrets.TF_SA_EMAIL }}
+          service_account: ${{ secrets.TF_SA_EMAIL_DEV }}
           token_format: access_token
 
       - name: Export SA token for Terraform
@@ -63,17 +72,76 @@ jobs:
           terraform_version: ${{ env.TF_VERSION }}
 
       - run: terraform init -backend-config="bucket=t-labs-state-dev"
-      - run: terraform plan -out=tfplan -no-color
+      - name: Plan
+        run: |
+          terraform plan -out=tfplan -no-color | tee plan.txt
+      - name: Render plan to job summary
+        run: |
+          {
+            echo '### Terraform plan — dev'
+            echo
+            echo '```hcl'
+            head -c 60000 plan.txt
+            echo
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload tfplan artifact
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: tfplan-dev
+          path: |
+            environments/dev/tfplan
+            environments/dev/plan.txt
+          retention-days: 7
+
+  apply-dev:
+    name: Apply — dev
+    needs: plan-dev
+    runs-on: ubuntu-latest
+    environment: dev
+    concurrency:
+      group: terraform-apply-dev
+      cancel-in-progress: false
+    defaults:
+      run:
+        working-directory: environments/dev
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - uses: google-github-actions/auth@6fc4af4b145ae7821d527454aa9bd537d1f2dc5f # v2.1.7
+        id: auth
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.TF_SA_EMAIL_DEV }}
+          token_format: access_token
+
+      - name: Export SA token for Terraform
+        env:
+          ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
+        run: |
+          echo "::add-mask::${ACCESS_TOKEN}"
+          echo "GOOGLE_OAUTH_ACCESS_TOKEN=${ACCESS_TOKEN}" >> "$GITHUB_ENV"
+          printf 'GOOGLE_CLOUD_PROJECT=\nCLOUDSDK_CORE_PROJECT=\nCLOUDSDK_PROJECT=\nGCLOUD_PROJECT=\nGCP_PROJECT=\n' >> "$GITHUB_ENV"
+
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - name: Download tfplan
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          name: tfplan-dev
+          path: environments/dev
+
+      - run: terraform init -backend-config="bucket=t-labs-state-dev"
       - run: terraform apply tfplan
 
-  # ── Stage: manual dispatch only — requires GitHub environment protection ───
-  apply-stage:
-    name: Apply — stage
+  # ── stage ──────────────────────────────────────────────────────────────────
+  plan-stage:
+    name: Plan — stage
     runs-on: ubuntu-latest
-    environment: stage   # configure required reviewers in GitHub repo settings
-    concurrency:
-      group: terraform-apply-stage
-      cancel-in-progress: false
+    environment: stage-plan
     if: github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'stage'
     defaults:
       run:
@@ -85,7 +153,7 @@ jobs:
         id: auth
         with:
           workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
-          service_account: ${{ secrets.TF_SA_EMAIL }}
+          service_account: ${{ secrets.TF_SA_EMAIL_STAGE }}
           token_format: access_token
 
       - name: Export SA token for Terraform
@@ -101,17 +169,72 @@ jobs:
           terraform_version: ${{ env.TF_VERSION }}
 
       - run: terraform init -backend-config="bucket=t-labs-state-stage"
-      - run: terraform plan -out=tfplan -no-color
+      - name: Plan
+        run: terraform plan -out=tfplan -no-color | tee plan.txt
+      - name: Render plan to job summary
+        run: |
+          {
+            echo '### Terraform plan — stage'
+            echo
+            echo '```hcl'
+            head -c 60000 plan.txt
+            echo
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: tfplan-stage
+          path: |
+            environments/stage/tfplan
+            environments/stage/plan.txt
+          retention-days: 7
+
+  apply-stage:
+    name: Apply — stage
+    needs: plan-stage
+    runs-on: ubuntu-latest
+    environment: stage
+    concurrency:
+      group: terraform-apply-stage
+      cancel-in-progress: false
+    defaults:
+      run:
+        working-directory: environments/stage
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - uses: google-github-actions/auth@6fc4af4b145ae7821d527454aa9bd537d1f2dc5f # v2.1.7
+        id: auth
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.TF_SA_EMAIL_STAGE }}
+          token_format: access_token
+
+      - name: Export SA token for Terraform
+        env:
+          ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
+        run: |
+          echo "::add-mask::${ACCESS_TOKEN}"
+          echo "GOOGLE_OAUTH_ACCESS_TOKEN=${ACCESS_TOKEN}" >> "$GITHUB_ENV"
+          printf 'GOOGLE_CLOUD_PROJECT=\nCLOUDSDK_CORE_PROJECT=\nCLOUDSDK_PROJECT=\nGCLOUD_PROJECT=\nGCP_PROJECT=\n' >> "$GITHUB_ENV"
+
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          name: tfplan-stage
+          path: environments/stage
+
+      - run: terraform init -backend-config="bucket=t-labs-state-stage"
       - run: terraform apply tfplan
 
-  # ── Prod: manual dispatch only — requires GitHub environment protection ─────
-  apply-prod:
-    name: Apply — prod
+  # ── prod ───────────────────────────────────────────────────────────────────
+  plan-prod:
+    name: Plan — prod
     runs-on: ubuntu-latest
-    environment: prod    # configure required reviewers + deployment branches in GitHub repo settings
-    concurrency:
-      group: terraform-apply-prod
-      cancel-in-progress: false
+    environment: prod-plan
     if: github.event_name == 'workflow_dispatch' && github.event.inputs.environment == 'prod'
     defaults:
       run:
@@ -123,7 +246,7 @@ jobs:
         id: auth
         with:
           workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
-          service_account: ${{ secrets.TF_SA_EMAIL }}
+          service_account: ${{ secrets.TF_SA_EMAIL_PROD }}
           token_format: access_token
 
       - name: Export SA token for Terraform
@@ -139,5 +262,63 @@ jobs:
           terraform_version: ${{ env.TF_VERSION }}
 
       - run: terraform init -backend-config="bucket=t-labs-state-prod"
-      - run: terraform plan -out=tfplan -no-color
+      - name: Plan
+        run: terraform plan -out=tfplan -no-color | tee plan.txt
+      - name: Render plan to job summary
+        run: |
+          {
+            echo '### Terraform plan — prod'
+            echo
+            echo '```hcl'
+            head -c 60000 plan.txt
+            echo
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: tfplan-prod
+          path: |
+            environments/prod/tfplan
+            environments/prod/plan.txt
+          retention-days: 7
+
+  apply-prod:
+    name: Apply — prod
+    needs: plan-prod
+    runs-on: ubuntu-latest
+    environment: prod
+    concurrency:
+      group: terraform-apply-prod
+      cancel-in-progress: false
+    defaults:
+      run:
+        working-directory: environments/prod
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - uses: google-github-actions/auth@6fc4af4b145ae7821d527454aa9bd537d1f2dc5f # v2.1.7
+        id: auth
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.TF_SA_EMAIL_PROD }}
+          token_format: access_token
+
+      - name: Export SA token for Terraform
+        env:
+          ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
+        run: |
+          echo "::add-mask::${ACCESS_TOKEN}"
+          echo "GOOGLE_OAUTH_ACCESS_TOKEN=${ACCESS_TOKEN}" >> "$GITHUB_ENV"
+          printf 'GOOGLE_CLOUD_PROJECT=\nCLOUDSDK_CORE_PROJECT=\nCLOUDSDK_PROJECT=\nGCLOUD_PROJECT=\nGCP_PROJECT=\n' >> "$GITHUB_ENV"
+
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          name: tfplan-prod
+          path: environments/prod
+
+      - run: terraform init -backend-config="bucket=t-labs-state-prod"
       - run: terraform apply tfplan

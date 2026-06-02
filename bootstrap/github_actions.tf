@@ -49,12 +49,24 @@ resource "google_iam_workload_identity_pool_provider" "github" {
 #                        deleted after Phase D migrates the workflows.
 
 # Per-env Terraform SAs — tied to GitHub Environment claim.
+# Bound to BOTH "<env>" (apply jobs, required-reviewers gated) and "<env>-plan"
+# (plan jobs, no gate). The plan-job environment carries no required reviewers
+# in GitHub, so plan runs immediately and its output becomes the context for
+# the approval that gates the apply job.
 resource "google_service_account_iam_member" "github_wif_terraform_env" {
   for_each = google_service_account.terraform_env
 
   service_account_id = each.value.name
   role               = "roles/iam.workloadIdentityUser"
   member             = "principalSet://iam.googleapis.com/${google_iam_workload_identity_pool.github.name}/attribute.environment/${each.key}"
+}
+
+resource "google_service_account_iam_member" "github_wif_terraform_env_plan" {
+  for_each = google_service_account.terraform_env
+
+  service_account_id = each.value.name
+  role               = "roles/iam.workloadIdentityUser"
+  member             = "principalSet://iam.googleapis.com/${google_iam_workload_identity_pool.github.name}/attribute.environment/${each.key}-plan"
 }
 
 # Plan-only SA — tied to pull_request events.

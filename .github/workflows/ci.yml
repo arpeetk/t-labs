@@ -1,13 +1,17 @@
 name: CI
 
+# PR-time gates: CLI build/vet/test, Terraform fmt/validate across all envs,
+# and a Terraform plan on dev. The plan job impersonates a read-only SA
+# (terraform-plan-ro) so a malicious PR cannot mutate any environment, even
+# after the WIF exchange.
+
 on:
   pull_request:
     branches: [main]
 
-# Workflow-level: read-only. pull-requests: write is scoped to tf-plan only.
 permissions:
   contents: read
-  id-token: write      # WIF token exchange
+  id-token: write
 
 env:
   TF_VERSION: "~> 1.8"
@@ -73,12 +77,12 @@ jobs:
         run: terraform validate
 
   # ── Terraform: plan dev and post as PR comment ─────────────────────────────
+  # Uses the dedicated read-only plan SA. WIF principal binding is tied to
+  # pull_request events, so a malicious push or workflow_dispatch cannot use it.
   tf-plan:
     name: Terraform — plan dev
     runs-on: ubuntu-latest
     needs: tf-validate
-    environment: dev
-    # Narrowed permission: only this job needs to write PR comments.
     permissions:
       contents: read
       id-token: write
@@ -93,7 +97,7 @@ jobs:
         id: auth
         with:
           workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
-          service_account: ${{ secrets.TF_SA_EMAIL }}
+          service_account: ${{ secrets.TF_SA_EMAIL_PLAN }}
           token_format: access_token
 
       - name: Export SA token for Terraform
@@ -115,7 +119,7 @@ jobs:
         id: plan
         run: |
           set +e
-          terraform plan -no-color 2>&1 | tee plan.txt
+          terraform plan -lock=false -no-color 2>&1 | tee plan.txt
           echo "exit_code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
 
       - name: Post plan as PR comment
@@ -139,7 +143,6 @@ jobs:
               '</details>',
             ].join('\n');
 
-            // Replace previous bot plan comment if present (fetch up to 100 to handle busy PRs).
             const existing = await github.rest.issues.listComments({
               owner: context.repo.owner,
               repo:  context.repo.repo,
