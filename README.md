@@ -22,7 +22,7 @@ graph TD
     ───────────────────────
     Artifact Registry
     Terraform State Buckets
-    Terraform Service Account"]
+    Per-env Terraform Service Accounts"]
 
     FD  --> PD["t-labs-dev-2 · us-central1
     ───────────────────────
@@ -71,22 +71,31 @@ graph LR
 
     DG  -->|"viewer + container.developer"| FD
     DG  -->|"viewer + container.developer"| FST
-    IG  -->|"editor"| FD & FST & FP
+    IG  -->|"scoped admin roles"| FD & FST & FP
 
-    TF["🤖 Terraform SA
-    terraform@t-labs-shared
-    CI/CD only"]
-    TF  -->|"owner"| FD & FST & FP
+    subgraph TF_SAs["🤖 Terraform SAs — CI/CD only · live in t-labs-shared"]
+        TFD["terraform-dev\nscoped admin on dev only"]
+        TFST["terraform-stage\nscoped admin on stage only"]
+        TFP["terraform-prod\nscoped admin on prod only"]
+        TFRO["terraform-plan-ro\nviewer on all envs · PR plans"]
+    end
 
-    style DG fill:#34a853,color:#fff,stroke:none
-    style IG fill:#ea4335,color:#fff,stroke:none
-    style TF fill:#4285F4,color:#fff,stroke:none
-    style FD  fill:#e8f0fe,stroke:#4285F4
-    style FST fill:#fff8e1,stroke:#fbbc04
-    style FP  fill:#fce8e6,stroke:#ea4335
+    TFD  -->|"12 scoped admin roles"| FD
+    TFST -->|"12 scoped admin roles"| FST
+    TFP  -->|"12 scoped admin roles"| FP
+
+    style DG   fill:#34a853,color:#fff,stroke:none
+    style IG   fill:#ea4335,color:#fff,stroke:none
+    style TFD  fill:#4285F4,color:#fff,stroke:none
+    style TFST fill:#4285F4,color:#fff,stroke:none
+    style TFP  fill:#4285F4,color:#fff,stroke:none
+    style TFRO fill:#9aa0a6,color:#fff,stroke:none
+    style FD   fill:#e8f0fe,stroke:#4285F4
+    style FST  fill:#fff8e1,stroke:#fbbc04
+    style FP   fill:#fce8e6,stroke:#ea4335
 ```
 
-Adding or removing a user from a Google Workspace group takes effect immediately — no Terraform change required. Developers have no access to the prod folder or prod state bucket.
+**Terraform SAs hold no `roles/owner`.** Each per-env SA is granted only the 12 roles it actually needs (compute, container, Cloud SQL, Secret Manager, IAM, KMS, etc.) — scoped to its own environment project. A compromised dev SA cannot read or mutate stage or prod. Adding or removing a user from a Google Workspace group takes effect immediately with no Terraform change required. Developers have no access to the prod folder or prod state bucket.
 
 ---
 
@@ -129,7 +138,7 @@ graph TD
     LB --> NA & NB & NC
     NA & NB & NC --- PODS
     NA & NB & NC -->|"outbound"| NAT --> INTERNET
-    PODS <-->|"port 5432 · private IP"| PSA <--> PG
+    PODS <-->|"port 5432 · private IP · TLS required"| PSA <--> PG
     PG -.->|"sync replication"| PGST
     PODS -->|"Artifact Registry · Secret Manager
     via Private Google Access"| INTERNET
@@ -142,7 +151,7 @@ graph TD
     style PGST fill:#e6f4ea,stroke:#34a853
 ```
 
-Cloud SQL has no public endpoint. GKE pods connect directly on port 5432 over the private VPC via Private Services Access — no proxy required.
+Cloud SQL has no public endpoint. GKE pods connect directly on port 5432 over the private VPC via Private Services Access. `ENCRYPTED_ONLY` is enforced on the Cloud SQL instance — unencrypted connections are rejected at the database level.
 
 ---
 
@@ -182,9 +191,9 @@ graph TD
 
         subgraph DATA["Data Layer"]
             CSQL["☁️ Cloud SQL PostgreSQL 16
-            HA · Private IP only"]
+            HA · Private IP only · TLS required"]
             SM["🔐 Secret Manager
-            DB password · app secrets"]
+            DB connection · app secrets"]
         end
 
         GSA["🔑 Google Service Account
@@ -197,7 +206,7 @@ graph TD
     AR -->|"image pull
     artifactregistry.reader on node SA"| NP
     NP --> APP
-    AC -->|"port 5432 · private IP"| CSQL
+    AC -->|"port 5432 · private IP · sslmode=require"| CSQL
     SM -->|"secret fetched at deploy time
     injected as env var"| APP
     KSA --> GSA --> DATA
@@ -213,7 +222,7 @@ graph TD
 
 ### CI / CD Architecture
 
-Three GitHub Actions workflows run on every change. All GCP authentication uses Workload Identity Federation — no long-lived service account keys are stored anywhere.
+Four GitHub Actions workflows run on every change. All GCP authentication uses Workload Identity Federation — no long-lived service account keys are stored anywhere.
 
 ```mermaid
 flowchart TD
@@ -221,50 +230,88 @@ flowchart TD
     MERGE["Merge to main"]
 
     subgraph CI["ci.yml — on: pull_request"]
-        CLI["CLI — build · vet · test\ngo build · vet · test ./pkg/..."]
-        FMT["Terraform — fmt\nterraform fmt -check -recursive"]
-        VAL["Terraform — validate\ndev · stage · prod in parallel"]
-        PLAN["Terraform — plan dev\nterraform plan → PR comment"]
+        CLI["CLI — build · vet · test
+        go build · vet · test ./pkg/..."]
+        FMT["Terraform — fmt check
+        terraform fmt -check -recursive"]
+        VAL["Terraform — validate
+        dev · stage · prod in parallel"]
+        PLAN["Terraform — plan dev
+        terraform plan -lock=false"]
+        TRIVY["TF Security — Trivy config scan
+        HIGH + CRITICAL · SARIF → GitHub"]
 
         FMT --> VAL --> PLAN
     end
 
-    subgraph CD_TF["cd-terraform.yml — on: push to main\npaths: modules/** · environments/dev/**"]
-        APPLYDEV["Apply — dev\nauto on every merge\nconcurrency: queued, never cancelled"]
-        APPLYSTAGE["Apply — stage\nworkflow_dispatch only\nrequires GitHub environment approval"]
-        APPLYPROD["Apply — prod\nworkflow_dispatch only\nrequires GitHub environment approval"]
+    subgraph CD_TF["cd-terraform.yml — on: push to main
+    paths: modules/** · environments/dev/** · bootstrap/github_actions.tf"]
+        subgraph PLAN_PHASE["Plan phase — auto, no approval"]
+            PD["Plan — dev
+            environment: dev-plan
+            uploads tfplan artifact"]
+        end
+        subgraph APPLY_PHASE["Apply phase — requires GitHub env reviewers"]
+            AD["Apply — dev
+            environment: dev
+            downloads + applies exact tfplan"]
+            AST["Apply — stage
+            workflow_dispatch only"]
+            AP["Apply — prod
+            workflow_dispatch only"]
+        end
+        PD -->|"plan reviewed → reviewer approves"| AD
     end
 
-    subgraph CD_IMG["cd-images.yml — on: push to main\npaths: apps/**"]
-        DETECT["Detect changed apps\ndorny/paths-filter"]
-        BHW["Build · push — hello-world\nonly if apps/hello-world/** changed"]
-        BAS["Build · push — api-service\nonly if apps/api-service/** changed"]
+    subgraph CD_IMG["cd-images.yml — on: push to main
+    paths: apps/**"]
+        DETECT["Detect changed apps
+        dorny/paths-filter"]
+        BHW["Build · push — hello-world
+        only if apps/hello-world/** changed"]
+        BAS["Build · push — api-service
+        only if apps/api-service/** changed"]
         DETECT --> BHW & BAS
     end
 
+    subgraph TF_SEC["tf-security.yml — on: push to main · schedule: weekly"]
+        TFSCAN["Trivy config scan (full repo)
+        HIGH + CRITICAL · SARIF upload"]
+    end
+
     subgraph AUTH["GCP Auth — Workload Identity Federation"]
-        WIF["OIDC token exchange\ngithub.repository == arpeetk/t-labs"]
-        TFSA["Terraform SA\nterraform@t-labs-shared\nroles/owner on env folders"]
-        IMGSA["ci-image-pusher SA\nci-image-pusher@t-labs-shared\nroles/artifactregistry.writer only"]
-        WIF --> TFSA & IMGSA
+        WIF["OIDC token exchange
+        github.repository == arpeetk/t-labs
+        attribute.environment == {env} or {env}-plan"]
+        TFENV["terraform-{dev|stage|prod}@t-labs-shared
+        12 scoped admin roles on own env only"]
+        TFRO["terraform-plan-ro@t-labs-shared
+        viewer on all envs · PR plans only"]
+        IMGSA["ci-image-pusher@t-labs-shared
+        roles/artifactregistry.writer only"]
+        WIF --> TFENV & TFRO & IMGSA
     end
 
     subgraph AR["Artifact Registry · t-labs-shared"]
-        IMG["hello-world:latest · sha\napi-service:latest · sha"]
+        IMG["hello-world:latest · sha
+        api-service:latest · sha"]
     end
 
-    PR --> CI
+    PR --> CI & TF_SEC
     MERGE --> CD_TF & CD_IMG
-    CI & CD_TF -->|"WIF + Terraform SA"| AUTH
+    CI -->|"WIF + plan-ro SA"| AUTH
+    CD_TF -->|"WIF + per-env SA"| AUTH
     CD_IMG -->|"WIF + image-pusher SA"| AUTH
     BHW & BAS -->|"docker push"| AR
 
     style PR    fill:#e8f0fe,stroke:#4285F4
     style MERGE fill:#e6f4ea,stroke:#34a853
-    style APPLYDEV   fill:#e6f4ea,stroke:#34a853
-    style APPLYSTAGE fill:#fff8e1,stroke:#fbbc04
-    style APPLYPROD  fill:#fce8e6,stroke:#ea4335
-    style TFSA  fill:#4285F4,color:#fff,stroke:none
+    style PD          fill:#e8f0fe,stroke:#4285F4
+    style AD          fill:#e6f4ea,stroke:#34a853
+    style AST         fill:#fff8e1,stroke:#fbbc04
+    style AP          fill:#fce8e6,stroke:#ea4335
+    style TFENV fill:#4285F4,color:#fff,stroke:none
+    style TFRO  fill:#9aa0a6,color:#fff,stroke:none
     style IMGSA fill:#34a853,color:#fff,stroke:none
     style WIF   fill:#fbbc04,color:#000,stroke:none
     style AR    fill:#4285F4,color:#fff,stroke:none
@@ -274,17 +321,22 @@ flowchart TD
 
 | Workflow | Trigger | What it does |
 |----------|---------|--------------|
-| `ci.yml` | Pull request to `main` | Builds and tests the CLI; checks Terraform formatting; validates all three environment configs; runs `terraform plan` on dev and posts the output as a PR comment |
-| `cd-terraform.yml` | Push to `main` (paths: `modules/**`, `environments/dev/**`) | Auto-applies dev on every merge; stage and prod require a manual `workflow_dispatch` with GitHub environment protection (required reviewers) |
+| `ci.yml` | Pull request to `main` | Builds and tests the CLI; checks Terraform formatting; validates all three environments; runs `terraform plan -lock=false` on dev using the read-only plan SA; runs Trivy config scan |
+| `cd-terraform.yml` | Push to `main` (paths: `modules/**`, `environments/dev/**`, `bootstrap/github_actions.tf`) | Runs plan-dev automatically (no approval), uploads the plan artifact; apply-dev downloads and applies the exact same artifact after a reviewer approves the GitHub `dev` environment; stage and prod require a manual `workflow_dispatch` and pass through GitHub environment protection rules |
 | `cd-images.yml` | Push to `main` (paths: `apps/**`) | Detects which apps changed; rebuilds and pushes only those images — tagged `:latest` and `:<sha>` |
+| `tf-security.yml` | Push to `main`; weekly schedule | Trivy config scan across the full repo (HIGH + CRITICAL); results uploaded as SARIF to GitHub Security |
 
 **Security decisions**
 
-- **No stored credentials** — GitHub Actions exchanges its OIDC token for a short-lived GCP access token via WIF; the token is masked before being written to `GITHUB_ENV`
-- **Least-privilege image SA** — `ci-image-pusher` has only `roles/artifactregistry.writer` on the t-labs registry; a compromised Docker build context cannot escalate to infrastructure
-- **Saved plan in CD** — `cd-terraform.yml` runs `plan -out=tfplan` then `apply tfplan`; the apply is bounded to the reviewed plan and cannot diverge if state changes between steps
+- **No stored credentials** — GitHub Actions exchanges its OIDC token for a short-lived GCP access token via WIF; attribute conditions gate the exchange to the correct GitHub environment (`dev-plan` for plan jobs, `dev` for apply jobs)
+- **Per-env Terraform SAs with scoped roles** — `terraform-dev` holds 12 admin roles on `t-labs-dev-2` only; a compromised dev token cannot read or mutate stage or prod state
+- **Separate plan and apply GitHub Environments** — the plan runs automatically (no approval gate); the apply is gated by required reviewers in the `dev` GitHub Environment; the apply downloads the exact plan artifact the reviewer approved and cannot diverge if state changes between steps
+- **Read-only plan SA for PRs** — `terraform-plan-ro` has `roles/viewer` + `roles/iam.securityReviewer` only; a malicious PR that exfiltrates the token can list resources but cannot mutate anything
+- **Least-privilege image SA** — `ci-image-pusher` has only `roles/artifactregistry.writer`; a compromised Docker build context cannot escalate to infrastructure
+- **Trivy config scanning** — HIGH and CRITICAL findings in IaC files block the CI run; results are uploaded to GitHub Security as SARIF for persistent visibility
+- **Dependabot** — weekly PRs for Go module and GitHub Actions SHA upgrades keep the dependency footprint current
+- **CODEOWNERS** — `CODEOWNERS` file gates all infrastructure changes on a review from the infra-admin team
 - **Concurrency groups** — Terraform apply jobs use `cancel-in-progress: false`; concurrent merges queue rather than race
-- **Dev auto-apply, stage/prod gated** — only `environments/dev/**` and `modules/**` changes trigger auto-apply; stage and prod changes require a deliberate `workflow_dispatch` and pass through GitHub environment protection rules
 
 ---
 
@@ -321,7 +373,7 @@ env:
     value: "dev"
 
 secrets:
-  - envVar: DB_PASSWORD    # env var name injected into the container
+  - envVar: DB_CONNECTION  # env var name injected into the container
     secret: my-db-secret   # Secret Manager secret ID
 
 iam:
@@ -350,8 +402,10 @@ tld delete -f deploy.yaml
 3. Creates a Google Service Account and grants the declared IAM roles (if `iam.roles` is set)
 4. Binds the GCP SA to the Kubernetes SA via Workload Identity
 5. Fetches secrets from Secret Manager and creates a Kubernetes Secret
-6. Applies the rendered Deployment, Service, and ServiceAccount manifests
+6. Applies the rendered Deployment, Service, ServiceAccount, and PodDisruptionBudget manifests
 7. Waits for the rollout to complete (`--timeout=5m`)
+
+`tld` automatically sets `imagePullPolicy: Always` for `:latest`-tagged images and `IfNotPresent` for immutable digest-tagged images, so CI/CD pushes are always picked up by new pods without manual restarts.
 
 ### Environment variables
 
@@ -364,36 +418,39 @@ tld delete -f deploy.yaml
 
 ### Connecting to Cloud SQL
 
-Cloud SQL is accessible via private IP within the VPC — no proxy sidecar needed. Set `DB_HOST` to the private IP from Terraform output:
+Cloud SQL is accessible via private IP within the VPC — no proxy sidecar needed. The connection details are stored as a single JSON secret in Secret Manager so apps get host, port, user, and database name in one fetch:
 
 ```bash
-# Get the private IP for your environment
-terraform output cloudsql_private_ip    # run from environments/dev/
+# The secret value is a JSON object — inspect it:
+gcloud secrets versions access latest \
+  --secret=api-service-db-connection \
+  --project=t-labs-dev-2
+# {"db_name":"appdb","db_user":"appuser","host":"10.241.220.2","port":5432}
+```
 
-# Add to your deploy.yaml
-env:
-  - name: DB_HOST
-    value: "10.241.220.2"
-  - name: DB_USER
-    value: "appuser"
-  - name: DB_NAME
-    value: "mydb"
+Reference it in `deploy.yaml`:
+
+```yaml
 secrets:
-  - envVar: DB_PASSWORD
-    secret: t-labs-dev-db-password
+  - envVar: DB_CONNECTION    # JSON string injected as a single env var
+    secret: api-service-db-connection
 iam:
   roles:
     - roles/secretmanager.secretAccessor
+    - roles/cloudsql.client
 ```
+
+In your application, parse the JSON from `DB_CONNECTION` and connect with `sslmode=require` — the Cloud SQL instance rejects unencrypted connections at the database level.
 
 ### Building and pushing images
 
 ```bash
-# Build with local Docker
-docker build -t us-central1-docker.pkg.dev/t-labs-shared/t-labs/my-service:latest .
-docker push us-central1-docker.pkg.dev/t-labs-shared/t-labs/my-service:latest
+# Build for amd64 (required when cross-compiling on Apple Silicon for GKE nodes)
+docker buildx build --platform linux/amd64 \
+  -t us-central1-docker.pkg.dev/t-labs-shared/t-labs/my-service:latest \
+  --push .
 
-# Build with Cloud Build (use this if local Docker Hub is unreachable)
+# Build with Cloud Build (avoids cross-compilation)
 gcloud builds submit \
   --project=t-labs-shared \
   --tag=us-central1-docker.pkg.dev/t-labs-shared/t-labs/my-service:latest \
@@ -410,18 +467,29 @@ t-labs/
 │   ├── main.tf
 │   ├── gcs.tf
 │   ├── artifact_registry.tf
-│   ├── iam.tf
+│   ├── github_actions.tf       # WIF provider + per-env SA bindings
+│   ├── iam.tf                  # Per-env Terraform SAs, plan-ro SA, developer groups
 │   └── terraform.tfvars        # gitignored — org_id + billing_account_id
 │
 ├── modules/
 │   ├── vpc/                    # VPC, 3 subnets, Cloud NAT, Private Services Access
 │   ├── gke/                    # Regional GKE cluster, autoscaling node pool, Workload Identity
-│   └── cloudsql/               # HA PostgreSQL 16, private IP only, password → Secret Manager
+│   └── cloudsql/               # HA PostgreSQL 16, private IP only, ENCRYPTED_ONLY, password → Secret Manager
 │
 ├── environments/
 │   ├── dev/                    # us-central1 · small sizing · deletion_protection=false
 │   ├── stage/                  # us-east4   · medium sizing
 │   └── prod/                   # us-west1   · large sizing · deletion_protection=true
+│
+├── .github/
+│   ├── workflows/
+│   │   ├── ci.yml              # PR checks: fmt, validate, plan-dev, Trivy
+│   │   ├── cd-terraform.yml    # Plan-then-apply, per-env gating
+│   │   ├── cd-images.yml       # Build + push changed app images
+│   │   └── tf-security.yml     # Trivy config scan (full repo, weekly)
+│   └── dependabot.yml          # Weekly Go module + GHA SHA updates
+│
+├── CODEOWNERS                  # All infra changes require infra-admin review
 │
 ├── cli/                        # tld CLI source (Go)
 │   ├── cmd/                    # cobra commands: deploy, delete, status
@@ -448,6 +516,7 @@ t-labs/
 | **Cloud SQL Tier** | `db-custom-1-3840` | `db-custom-2-7680` | `db-custom-4-15360` |
 | **Deletion Protection** | ✗ | ✗ | ✓ |
 | **State Bucket** | `t-labs-state-dev` | `t-labs-state-stage` | `t-labs-state-prod` |
+| **Terraform SA** | `terraform-dev@t-labs-shared` | `terraform-stage@t-labs-shared` | `terraform-prod@t-labs-shared` |
 
 ---
 
@@ -461,7 +530,7 @@ t-labs/
 | gcloud CLI | `brew install --cask google-cloud-sdk` |
 | kubectl | `gcloud components install kubectl` |
 | gke-gcloud-auth-plugin | `gcloud components install gke-gcloud-auth-plugin` |
-| Go `>= 1.17` | Required to build the `tld` CLI |
+| Go `>= 1.22` | Required to build the `tld` CLI |
 | Org Admin role | Required to run bootstrap |
 
 ---
@@ -532,8 +601,10 @@ tld status -f apps/hello-world/deploy.yaml
 ```bash
 gcloud auth configure-docker us-central1-docker.pkg.dev
 
-docker tag myapp us-central1-docker.pkg.dev/t-labs-shared/t-labs/myapp:latest
-docker push us-central1-docker.pkg.dev/t-labs-shared/t-labs/myapp:latest
+# Build for linux/amd64 if developing on Apple Silicon
+docker buildx build --platform linux/amd64 \
+  -t us-central1-docker.pkg.dev/t-labs-shared/t-labs/myapp:latest \
+  --push .
 ```
 
 ---
@@ -629,8 +700,8 @@ cd cli && go test ./pkg/...
 # Inspect Terraform state
 terraform state list
 
-# Get Cloud SQL private IP (needed for DB_HOST in deploy.yaml)
-terraform output cloudsql_private_ip
+# Get Cloud SQL private IP
+terraform output cloudsql_private_ip   # run from environments/dev/
 
 # Fetch the DB password from Secret Manager
 gcloud secrets versions access latest \
@@ -651,19 +722,48 @@ cd environments/dev && terraform destroy
 ## Key Design Decisions
 
 - **One GCP project per environment** — full network and IAM blast-radius isolation; a misconfiguration in dev cannot touch prod
+- **Per-env Terraform SAs with scoped roles, not `roles/owner`** — each `terraform-{env}` SA holds exactly the roles Terraform actually exercises (compute, container, Cloud SQL, Secret Manager, KMS, IAM admin, etc.); a compromised CI token cannot escalate beyond its own environment; `roles/owner` is explicitly avoided per the CIS GCP Benchmark
+- **Plan-then-apply CD gates** — `cd-terraform.yml` runs `terraform plan -out=tfplan` first, uploads the artifact, and gates the apply behind a GitHub Environment reviewer; the apply downloads the exact artifact the reviewer approved and cannot diverge even if state changes between steps
 - **`tld` CLI over raw kubectl/gcloud** — engineers describe what their service needs (image, resources, secrets, IAM roles) in one YAML file; the CLI handles all Kubernetes and GCP wiring; no Kubernetes knowledge required to deploy
-- **Direct Cloud SQL private IP — no proxy sidecar** — GKE and Cloud SQL share a VPC via Private Services Access; apps connect directly on port 5432 using a password; eliminates the Cloud SQL Auth Proxy sidecar container, reducing pod complexity and removing the `roles/cloudsql.client` IAM requirement
+- **Direct Cloud SQL private IP — no proxy sidecar** — GKE and Cloud SQL share a VPC via Private Services Access; apps connect directly on port 5432 using a password; eliminates the Cloud SQL Auth Proxy sidecar container, reducing pod complexity
+- **`ENCRYPTED_ONLY` on Cloud SQL** — the Cloud SQL instance rejects any unencrypted TCP connection at the database level, not just by convention; apps must connect with `sslmode=require` or higher
+- **Connection details as a JSON secret** — host, port, user, and database name are stored as a single JSON value in Secret Manager (`DB_CONNECTION`), fetched once at deploy time and injected as a single env var; avoids four separate secrets for one database connection
 - **Secrets fetched at deploy time, not at runtime** — `tld` pulls values from Secret Manager once during deploy and stores them in a Kubernetes Secret; the running container reads a plain env var; no Secret Manager SDK or Workload Identity required just to read a database password
 - **Google Workspace Groups for IAM** — no Workforce Identity Federation needed since the org is on Google Workspace; group membership changes propagate to GCP immediately with no Terraform change
-- **Regional GKE cluster** — control plane and nodes distributed across 3 zones; no single zone failure can take down the cluster
+- **Regional GKE cluster** — control plane and nodes distributed across 3 zones; no single zone failure can take down the cluster or interrupt the autoscaler
+- **GKE etcd CMEK** — application-layer secrets in etcd are encrypted with a customer-managed Cloud KMS key; Google-managed encryption still applies to the underlying storage layer
+- **Dataplane V2 (ADVANCED_DATAPATH)** — eBPF-based networking with built-in Kubernetes NetworkPolicy enforcement; no separate CNI or network policy controller needed
 - **Cloud SQL private IP only** — no public endpoint; accessible only via Private Services Access from within the VPC; password auto-generated by Terraform and stored in Secret Manager
 - **Non-overlapping VPC CIDRs** — dev `10.0.x`, stage `10.10.x`, prod `10.20.x`; safe to peer in future without renumbering
 - **Single shared Artifact Registry** — images are built and pushed once, then promoted across environments by referencing the same digest; no per-env image rebuilds
 - **Separate GCS state bucket per environment** — prod state is inaccessible to developers; destroying one bucket cannot affect other environments' state
+- **Org-level audit logging** — `DATA_WRITE` audit logs are enabled across all GCP services at the organization level; Admin Activity logs (create/delete/setIamPolicy) are always-on and cannot be disabled
 
 ---
 
 ## Future Work
+
+### Cloud Armor WAF
+
+`tld`-deployed public services get a GKE `type:LoadBalancer` with an external IP. Cloud Armor (GCP's WAF) integrates at the Global HTTPS Load Balancer level and would add OWASP ruleset protection, rate limiting, and geo-based deny lists. The current architecture uses a regional TCP load balancer, so enabling Cloud Armor requires migrating public services to a Global HTTPS LB with a `BackendConfig` referencing the Cloud Armor policy. See `modules/gke/main.tf` for where this would be wired in.
+
+### Cloud SQL TLS Verification (`verify-ca` / `verify-full`)
+
+Apps currently connect with `sslmode=require`, which encrypts the connection but does not verify the server's certificate. Upgrading to `sslmode=verify-ca` prevents man-in-the-middle attacks on the private VPC (unlikely but possible if PSA is misconfigured). This requires distributing the Cloud SQL server CA certificate to every pod — the recommended path is mounting it as a Kubernetes Secret or using Certificate Manager. Tracked as a future hardening item in `modules/cloudsql/main.tf`.
+
+### Secret Rotation Automation
+
+DB passwords are auto-generated at `terraform apply` time and stored in Secret Manager. Rotation today requires a manual `terraform taint` and re-apply. Automating rotation (Secret Manager rotation notifications → Cloud Function → rotate DB password → update secret version) would reduce the window after a potential credential leak. The `cloudsql` module already outputs `db_password_secret_id` for this purpose.
+
+### GCS Object-Level Access Logging
+
+Cloud Audit Logs capture Data Access events at the API level (who called `storage.objects.get`). Object-level access logs in the GCS access log format (one log entry per object read) require enabling the GCS access log bucket setting, which writes logs to a separate GCS bucket. This is currently handled by the org-level `DATA_WRITE` audit config but is not surfaced in a per-bucket format suitable for SIEM ingestion.
+
+### Prometheus Workload Metrics
+
+Google Managed Prometheus is enabled on GKE clusters for system-component metrics. Application-level metrics require configuring a `PodMonitoring` or `ClusterPodMonitoring` resource per service. Adding a standard `PodMonitoring` resource to the `tld` manifest template (gated by an `observability.prometheus` flag in `deploy.yaml`) would give every deployed service automatic metrics scraping without per-team configuration.
+
+---
 
 ### Multi-Geography Architecture
 
