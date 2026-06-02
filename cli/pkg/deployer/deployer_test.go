@@ -16,6 +16,7 @@ func baseMF() *manifest.Manifest {
 		Replicas:    2,
 		Resources:   manifest.Resources{CPU: "250m", Memory: "256Mi"},
 		Service:     manifest.Service{Type: "public", Port: 8080},
+		Health:      manifest.Health{Path: "/health", Port: 8080},
 	}
 }
 
@@ -62,8 +63,9 @@ func TestRenderManifests_Basic(t *testing.T) {
 	out := render(t, baseMF(), "my-project")
 
 	docs := parseYAMLDocs(t, out)
-	if len(docs) != 3 {
-		t.Fatalf("expected 3 YAML documents (ServiceAccount, Deployment, Service), got %d", len(docs))
+	// SA + Deployment + Service + PDB (PDB present because replicas > 1).
+	if len(docs) != 4 {
+		t.Fatalf("expected 4 YAML documents (ServiceAccount, Deployment, Service, PDB), got %d", len(docs))
 	}
 
 	sa := kindDoc(docs, "ServiceAccount")
@@ -203,7 +205,72 @@ func TestRenderManifests_ValidYAML(t *testing.T) {
 	out := render(t, mf, "my-project")
 
 	docs := parseYAMLDocs(t, out)
+	if len(docs) != 4 {
+		t.Errorf("expected 4 docs, got %d", len(docs))
+	}
+}
+
+func TestRenderManifests_NoPDBForSingleReplica(t *testing.T) {
+	mf := baseMF()
+	mf.Replicas = 1
+	out := render(t, mf, "my-project")
+
+	docs := parseYAMLDocs(t, out)
 	if len(docs) != 3 {
-		t.Errorf("expected 3 docs, got %d", len(docs))
+		t.Fatalf("expected 3 docs (SA, Deployment, Service) without PDB, got %d", len(docs))
+	}
+	for _, doc := range docs {
+		if doc["kind"] == "PodDisruptionBudget" {
+			t.Error("PDB should not be emitted when replicas == 1")
+		}
+	}
+}
+
+func TestRenderManifests_PodSecurityDefaults(t *testing.T) {
+	out := render(t, baseMF(), "my-project")
+	// Every public service must run as non-root with seccomp + dropped caps,
+	// or the cluster's restricted PodSecurity admission will reject it.
+	wantSubstrings := []string{
+		"runAsNonRoot: true",
+		"readOnlyRootFilesystem: true",
+		"allowPrivilegeEscalation: false",
+		`drop: ["ALL"]`,
+		"seccompProfile",
+		"topologySpreadConstraints",
+		"livenessProbe",
+		"readinessProbe",
+	}
+	for _, want := range wantSubstrings {
+		if !strings.Contains(out, want) {
+			t.Errorf("rendered YAML missing %q", want)
+		}
+	}
+}
+
+func TestRenderSecretManifest_Base64AndStableOrder(t *testing.T) {
+	yaml1, err := renderSecretManifest("svc-secrets", "dev", "svc", map[string]string{
+		"DB_PASSWORD": "p4ssw0rd!",
+		"API_KEY":     "abc123",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	yaml2, _ := renderSecretManifest("svc-secrets", "dev", "svc", map[string]string{
+		"API_KEY":     "abc123",
+		"DB_PASSWORD": "p4ssw0rd!",
+	})
+	if yaml1 != yaml2 {
+		t.Errorf("renderSecretManifest output is not deterministic across input map orderings")
+	}
+	// Raw values must not appear in the rendered manifest — they should be base64-encoded.
+	if strings.Contains(yaml1, "p4ssw0rd!") {
+		t.Error("secret value appears un-encoded in rendered manifest")
+	}
+	if strings.Contains(yaml1, "abc123") {
+		t.Error("secret value appears un-encoded in rendered manifest")
+	}
+	// And the encoded form must be present.
+	if !strings.Contains(yaml1, "cDRzc3cwcmQh") {
+		t.Error("expected base64-encoded DB_PASSWORD value missing from rendered manifest")
 	}
 }

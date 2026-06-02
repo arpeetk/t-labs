@@ -22,6 +22,13 @@ resource "random_password" "db_password" {
   special = false
 }
 
+# Password rotation is deliberately manual today: bumping the `keepers` map below
+# (e.g. set `rotation = timestamp()` and commit a date) forces a new random value,
+# which is then written to a new Secret Manager version. Apps reading `latest`
+# pick it up automatically. For automated rotation, swap to
+# google_secret_manager_secret_rotation + a Cloud Function that updates the
+# Cloud SQL user. Tracked in README → Future Work.
+
 # ── Secret Manager ────────────────────────────────────────────────────────────
 
 resource "google_secret_manager_secret" "db_password" {

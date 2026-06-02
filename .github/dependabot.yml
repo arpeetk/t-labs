@@ -1,0 +1,56 @@
+version: 2
+
+updates:
+  # GitHub Actions — keep the SHA pins in workflows current.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      actions:
+        patterns:
+          - "*"
+
+  # Go modules for the tld CLI.
+  - package-ecosystem: gomod
+    directory: /cli
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+
+  # Go modules for the api-service sample app.
+  - package-ecosystem: gomod
+    directory: /apps/api-service
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+
+  # Docker base images for sample apps.
+  - package-ecosystem: docker
+    directory: /apps/hello-world
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: docker
+    directory: /apps/api-service
+    schedule:
+      interval: weekly
+
+  # Terraform module providers — alerts on hashicorp/google major bumps.
+  - package-ecosystem: terraform
+    directory: /modules/vpc
+    schedule:
+      interval: weekly
+  - package-ecosystem: terraform
+    directory: /modules/gke
+    schedule:
+      interval: weekly
+  - package-ecosystem: terraform
+    directory: /modules/cloudsql
+    schedule:
+      interval: weekly
+  - package-ecosystem: terraform
+    directory: /bootstrap
+    schedule:
+      interval: weekly
