@@ -51,15 +51,6 @@ resource "google_storage_bucket" "state" {
   depends_on = [google_project_service.shared_apis]
 }
 
-# Terraform SA gets full admin on all state buckets (storage.admin includes storage.buckets.get)
-resource "google_storage_bucket_iam_member" "terraform_state_admin" {
-  for_each = google_storage_bucket.state
-
-  bucket = each.value.name
-  role   = "roles/storage.admin"
-  member = "serviceAccount:${google_service_account.terraform.email}"
-}
-
 # Developers can read dev and stage state for debugging — no prod access.
 # Use string keys to avoid dependency on google_storage_bucket (deferred unknown on first apply).
 resource "google_storage_bucket_iam_member" "developer_state_reader" {

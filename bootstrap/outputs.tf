@@ -38,6 +38,3 @@ output "artifact_registry_name" {
   value = google_artifact_registry_repository.main.repository_id
 }
 
-output "terraform_service_account_email" {
-  value = google_service_account.terraform.email
-}

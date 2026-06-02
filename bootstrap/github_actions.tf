@@ -1,8 +1,12 @@
 # ── GitHub Actions — Workload Identity Federation ─────────────────────────────
 # Allows GitHub Actions to authenticate to GCP without long-lived SA keys.
 # After applying bootstrap, set these GitHub repo secrets:
-#   WIF_PROVIDER = $(terraform output -raw workload_identity_provider)
-#   TF_SA_EMAIL  = $(terraform output -raw terraform_service_account_email)
+#   WIF_PROVIDER        = $(terraform output -raw workload_identity_provider)
+#   TF_SA_EMAIL_DEV     = $(terraform output -raw terraform_env_sa_emails | jq -r '.dev')
+#   TF_SA_EMAIL_STAGE   = $(terraform output -raw terraform_env_sa_emails | jq -r '.stage')
+#   TF_SA_EMAIL_PROD    = $(terraform output -raw terraform_env_sa_emails | jq -r '.prod')
+#   TF_SA_EMAIL_PLAN    = $(terraform output -raw terraform_plan_ro_sa_email)
+#   IMAGES_SA_EMAIL     = $(terraform output -raw image_pusher_sa_email)
 
 resource "google_iam_workload_identity_pool" "github" {
   project                   = google_project.shared.project_id
@@ -45,8 +49,6 @@ resource "google_iam_workload_identity_pool_provider" "github" {
 #   terraform-plan-ro : only pull_request events. PR authors can run plan
 #                       but the SA has no write permissions to begin with.
 #   ci-image-pusher : push events (no PRs) so a malicious PR cannot push images.
-#   terraform (legacy) : still bound to the whole repo for backward compat,
-#                        deleted after Phase D migrates the workflows.
 
 # Per-env Terraform SAs — tied to GitHub Environment claim.
 # Bound to BOTH "<env>" (apply jobs, required-reviewers gated) and "<env>-plan"
@@ -92,14 +94,6 @@ resource "google_service_account_iam_member" "github_wif_image_pusher" {
   service_account_id = google_service_account.ci_image_pusher.name
   role               = "roles/iam.workloadIdentityUser"
   member             = "principalSet://iam.googleapis.com/${google_iam_workload_identity_pool.github.name}/attribute.event_name/push"
-}
-
-# Legacy: the original cross-repo binding for the catch-all terraform SA.
-# Removed once Phase D ships and no workflow references TF_SA_EMAIL.
-resource "google_service_account_iam_member" "github_wif" {
-  service_account_id = google_service_account.terraform.name
-  role               = "roles/iam.workloadIdentityUser"
-  member             = "principalSet://iam.googleapis.com/${google_iam_workload_identity_pool.github.name}/attribute.repository/arpeetk/t-labs"
 }
 
 output "workload_identity_provider" {

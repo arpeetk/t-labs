@@ -3,67 +3,12 @@
 # Goal: blast-radius isolation. There is one SA per environment + one
 # read-only plan SA, none of which holds roles/owner.
 #
-#   terraform-bootstrap : applies this directory. Holds org-level admin
-#                         (folders, projects, org policies, billing) plus
-#                         shared-project admin. WIF principal binding is
-#                         tied to push events on main and gated by a
-#                         dedicated `bootstrap` GitHub environment.
 #   terraform-dev/stage/prod : apply the matching env directory. Scoped admin
 #                              roles on their own env project + their own
 #                              state bucket only. WIF principal binding is
 #                              tied to GitHub environment `dev`/`stage`/`prod`.
 #   terraform-plan-ro   : runs the PR plan against dev. Viewer + state read
 #                         only. WIF binding tied to pull_request events.
-#
-# The old "terraform" SA below is kept temporarily so the existing CI secrets
-# (TF_SA_EMAIL) keep working until the workflows are migrated to the new
-# per-env secrets in Phase D, after which it is removed.
-
-resource "google_service_account" "terraform" {
-  account_id   = "terraform"
-  display_name = "Terraform Service Account (legacy — pending decommission)"
-  project      = google_project.shared.project_id
-
-  depends_on = [google_project_service.shared_apis]
-}
-
-resource "google_organization_iam_member" "terraform_folder_admin" {
-  org_id = var.org_id
-  role   = "roles/resourcemanager.folderAdmin"
-  member = "serviceAccount:${google_service_account.terraform.email}"
-}
-
-resource "google_organization_iam_member" "terraform_project_creator" {
-  org_id = var.org_id
-  role   = "roles/resourcemanager.projectCreator"
-  member = "serviceAccount:${google_service_account.terraform.email}"
-}
-
-resource "google_billing_account_iam_member" "terraform_billing_user" {
-  billing_account_id = var.billing_account_id
-  role               = "roles/billing.user"
-  member             = "serviceAccount:${google_service_account.terraform.email}"
-}
-
-resource "google_project_iam_member" "terraform_owner" {
-  for_each = local.env_projects
-
-  project = each.value
-  role    = "roles/owner"
-  member  = "serviceAccount:${google_service_account.terraform.email}"
-}
-
-resource "google_project_iam_member" "terraform_shared_owner" {
-  project = google_project.shared.project_id
-  role    = "roles/owner"
-  member  = "serviceAccount:${google_service_account.terraform.email}"
-}
-
-resource "google_organization_iam_member" "terraform_org_policy_admin" {
-  org_id = var.org_id
-  role   = "roles/orgpolicy.policyAdmin"
-  member = "serviceAccount:${google_service_account.terraform.email}"
-}
 
 # ── Per-env Terraform SAs ───────────────────────────────────────────────────
 
