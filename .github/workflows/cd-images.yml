@@ -108,3 +108,50 @@ jobs:
             ${{ env.REGISTRY }}/api-service:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  # ── Deploy to dev ──────────────────────────────────────────────────────────
+  # Runs after whichever build jobs completed successfully. Uses the
+  # terraform-dev SA (has container.admin + iam.serviceAccountAdmin) to build
+  # and run the tld CLI, which handles namespace, GSA, WI binding, and rollout.
+  deploy-dev:
+    name: Deploy — dev
+    runs-on: ubuntu-latest
+    needs: [build-hello-world, build-api-service]
+    if: |
+      always() &&
+      (needs.build-hello-world.result == 'success' ||
+       needs.build-api-service.result == 'success')
+    environment: dev-apps
+    env:
+      TLD_DEV_PROJECT: t-labs-dev-2
+      USE_GKE_GCLOUD_AUTH_PLUGIN: "True"
+
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - uses: actions/setup-go@3041bf56c941b39c61721a86cd11f3bb1338122a # v5.2.0
+        with:
+          go-version-file: cli/go.mod
+          cache-dependency-path: cli/go.sum
+
+      - name: Build tld CLI
+        run: cd cli && go build -o /usr/local/bin/tld ./cmd/tld
+
+      - uses: google-github-actions/auth@6fc4af4b145ae7821d527454aa9bd537d1f2dc5f # v2.1.7
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.TF_SA_EMAIL_DEV }}
+
+      - uses: google-github-actions/get-gke-credentials@3da1e46a907576cefaa90c484278bb5b259dd395 # v3.0.0
+        with:
+          cluster_name: t-labs-dev-gke
+          location: us-central1
+          project_id: t-labs-dev-2
+
+      - name: Deploy hello-world
+        if: needs.build-hello-world.result == 'success'
+        run: tld deploy -f apps/hello-world/deploy.yaml
+
+      - name: Deploy api-service
+        if: needs.build-api-service.result == 'success'
+        run: tld deploy -f apps/api-service/deploy.yaml

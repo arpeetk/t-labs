@@ -69,6 +69,17 @@ resource "google_service_account_iam_member" "github_wif_terraform_env_plan" {
   member             = "principalSet://iam.googleapis.com/${google_iam_workload_identity_pool.github.name}/attribute.environment/${each.key}-plan"
 }
 
+# App deploy jobs — tied to GitHub Environment "{env}-apps" (no required reviewers).
+# Allows auto-deploy to dev after images are pushed. Stage/prod bindings are
+# pre-created so adding gated deploy jobs there requires only a workflow change.
+resource "google_service_account_iam_member" "github_wif_terraform_env_apps" {
+  for_each = google_service_account.terraform_env
+
+  service_account_id = each.value.name
+  role               = "roles/iam.workloadIdentityUser"
+  member             = "principalSet://iam.googleapis.com/${google_iam_workload_identity_pool.github.name}/attribute.environment/${each.key}-apps"
+}
+
 # Plan-only SA — tied to pull_request events.
 resource "google_service_account_iam_member" "github_wif_terraform_plan_ro" {
   service_account_id = google_service_account.terraform_plan_ro.name
