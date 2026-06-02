@@ -145,6 +145,9 @@ jobs:
           workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
           service_account: ${{ secrets.TF_SA_EMAIL_DEV }}
 
+      - name: Install gke-gcloud-auth-plugin
+        run: gcloud components install gke-gcloud-auth-plugin --quiet
+
       - name: Deploy hello-world
         if: needs.build-hello-world.result == 'success'
         run: tld deploy -f apps/hello-world/deploy.yaml
