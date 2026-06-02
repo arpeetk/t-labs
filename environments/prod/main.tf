@@ -7,6 +7,34 @@ locals {
   ]
 }
 
+# KMS for GKE etcd CMEK (see environments/dev/main.tf for the design rationale).
+data "google_project" "current" {
+  project_id = var.project_id
+}
+
+resource "google_kms_key_ring" "gke" {
+  name     = "${local.prefix}-gke"
+  location = var.region
+  project  = var.project_id
+}
+
+resource "google_kms_crypto_key" "gke_etcd" {
+  name            = "etcd"
+  key_ring        = google_kms_key_ring.gke.id
+  purpose         = "ENCRYPT_DECRYPT"
+  rotation_period = "7776000s"
+
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+resource "google_kms_crypto_key_iam_member" "gke_etcd_robot" {
+  crypto_key_id = google_kms_crypto_key.gke_etcd.id
+  role          = "roles/cloudkms.cryptoKeyEncrypterDecrypter"
+  member        = "serviceAccount:service-${data.google_project.current.number}@container-engine-robot.iam.gserviceaccount.com"
+}
+
 module "vpc" {
   source = "../../modules/vpc"
 
@@ -30,26 +58,34 @@ module "gke" {
   vpc_id                = module.vpc.vpc_id
   private_gke_subnet_id = module.vpc.private_gke_subnet_id
 
-  master_cidr                = "172.16.2.0/28"
-  master_authorized_networks = var.master_authorized_networks
-  node_zones                 = local.node_zones
-  machine_type               = var.gke_machine_type
-  min_node_count             = var.gke_min_nodes
-  max_node_count             = var.gke_max_nodes
-  deletion_protection        = true
+  master_cidr                  = "172.16.2.0/28"
+  master_authorized_networks   = var.master_authorized_networks
+  enable_private_endpoint      = true
+  master_global_access_enabled = true
+  node_zones                   = local.node_zones
+  machine_type                 = var.gke_machine_type
+  min_node_count               = var.gke_min_nodes
+  max_node_count               = var.gke_max_nodes
+  deletion_protection          = true
+  database_encryption_key_name = google_kms_crypto_key.gke_etcd.id
+
+  depends_on = [google_kms_crypto_key_iam_member.gke_etcd_robot]
 }
 
 module "cloudsql" {
   source = "../../modules/cloudsql"
 
-  name                = local.prefix
-  project_id          = var.project_id
-  region              = var.region
-  vpc_id              = module.vpc.vpc_id
-  database_name       = "appdb"
-  db_user             = "appuser"
-  tier                = var.cloudsql_tier
-  deletion_protection = true
+  name                           = local.prefix
+  project_id                     = var.project_id
+  region                         = var.region
+  vpc_id                         = module.vpc.vpc_id
+  database_name                  = "appdb"
+  db_user                        = "appuser"
+  tier                           = var.cloudsql_tier
+  deletion_protection            = true
+  backup_retention_days          = var.backup_retention_days
+  transaction_log_retention_days = var.transaction_log_retention_days
+  deny_maintenance_period        = var.deny_maintenance_period
 
   depends_on = [module.vpc]
 }

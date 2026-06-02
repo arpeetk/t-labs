@@ -6,28 +6,42 @@ package deployer
 
 import (
 	"bytes"
+	"context"
+	"encoding/base64"
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"strings"
+	"syscall"
 	"text/template"
+	"time"
 
 	"github.com/summiteight/t-labs/cli/pkg/manifest"
 )
 
+// Per-command timeout. Long enough for a regional cluster credential fetch
+// or a kubectl rollout wait, short enough to not hang a CI job forever.
+const cmdTimeout = 6 * time.Minute
+
 type Config struct {
-	ProjectID  string // GCP project ID for the environment
-	Region     string // GCP region
+	ProjectID   string // GCP project ID for the environment
+	Region      string // GCP region
 	ClusterName string // GKE cluster name (default: <prefix>-<env>-gke)
 }
 
 type Deployer struct {
 	cfg Config
 	mf  *manifest.Manifest
+	ctx context.Context
 }
 
+// New returns a Deployer bound to the supplied environment config and manifest.
+// It also installs a SIGINT/SIGTERM handler so Ctrl-C cancels any in-flight
+// kubectl/gcloud subprocess instead of leaving them as zombies.
 func New(cfg Config, mf *manifest.Manifest) *Deployer {
-	return &Deployer{cfg: cfg, mf: mf}
+	ctx, _ := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	return &Deployer{cfg: cfg, mf: mf, ctx: ctx}
 }
 
 // Deploy provisions GCP resources then applies Kubernetes manifests.
@@ -84,7 +98,7 @@ func (d *Deployer) Status() error {
 		return err
 	}
 	ns := d.mf.Namespace()
-	return run("kubectl", "get", "deployment,service,pods",
+	return d.run("kubectl", "get", "deployment,service,pods,pdb",
 		"-n", ns, "-l", "app="+d.mf.Name)
 }
 
@@ -95,7 +109,7 @@ func (d *Deployer) configureKubeContext() error {
 	if cluster == "" {
 		cluster = fmt.Sprintf("t-labs-%s-gke", d.mf.Environment)
 	}
-	return run("gcloud", "container", "clusters", "get-credentials",
+	return d.run("gcloud", "container", "clusters", "get-credentials",
 		cluster, "--region", d.cfg.Region, "--project", d.cfg.ProjectID)
 }
 
@@ -104,11 +118,11 @@ func (d *Deployer) configureKubeContext() error {
 func (d *Deployer) createNamespace() error {
 	ns := d.mf.Namespace()
 	// create only if it doesn't exist
-	err := run("kubectl", "get", "namespace", ns)
+	err := d.run("kubectl", "get", "namespace", ns)
 	if err == nil {
 		return nil
 	}
-	return run("kubectl", "create", "namespace", ns)
+	return d.run("kubectl", "create", "namespace", ns)
 }
 
 // ── GCP service account + Workload Identity ───────────────────────────────────
@@ -126,13 +140,13 @@ func (d *Deployer) provisionGCPServiceAccount() error {
 	ns := d.mf.Namespace()
 
 	// Create GCP SA (idempotent — ignore already-exists)
-	_ = run("gcloud", "iam", "service-accounts", "create", gsaName,
+	_ = d.run("gcloud", "iam", "service-accounts", "create", gsaName,
 		"--project", d.cfg.ProjectID,
 		"--display-name", d.mf.Name+" deployer SA")
 
 	// Grant requested IAM roles
 	for _, role := range d.mf.IAM.Roles {
-		if err := run("gcloud", "projects", "add-iam-policy-binding", d.cfg.ProjectID,
+		if err := d.run("gcloud", "projects", "add-iam-policy-binding", d.cfg.ProjectID,
 			"--member", "serviceAccount:"+gsaEmail,
 			"--role", role,
 			"--condition=None"); err != nil {
@@ -143,7 +157,7 @@ func (d *Deployer) provisionGCPServiceAccount() error {
 	// Bind GCP SA to Kubernetes SA via Workload Identity
 	ksaMember := fmt.Sprintf("serviceAccount:%s.svc.id.goog[%s/%s]",
 		d.cfg.ProjectID, ns, d.mf.Name)
-	if err := run("gcloud", "iam", "service-accounts", "add-iam-policy-binding", gsaEmail,
+	if err := d.run("gcloud", "iam", "service-accounts", "add-iam-policy-binding", gsaEmail,
 		"--project", d.cfg.ProjectID,
 		"--role", "roles/iam.workloadIdentityUser",
 		"--member", ksaMember); err != nil {
@@ -157,51 +171,77 @@ func (d *Deployer) deleteGCPServiceAccount() error {
 		return nil
 	}
 	gsaEmail := fmt.Sprintf("%s@%s.iam.gserviceaccount.com", d.mf.Name, d.cfg.ProjectID)
-	return run("gcloud", "iam", "service-accounts", "delete", gsaEmail,
+	return d.run("gcloud", "iam", "service-accounts", "delete", gsaEmail,
 		"--project", d.cfg.ProjectID, "--quiet")
 }
 
 // ── secrets ───────────────────────────────────────────────────────────────────
 
-// fetchAndCreateSecrets pulls each secret from Secret Manager and stores it
-// in a Kubernetes Secret so the container sees it as an env var.
+// fetchAndCreateSecrets pulls each referenced secret from Secret Manager and
+// applies a Kubernetes Secret containing the values.
+//
+// Important: the secret values are NEVER passed as kubectl arguments. We
+// template a Secret manifest in-process (base64 data) and pipe it to
+// `kubectl apply` on stdin. Earlier versions used `--from-literal=KEY=VALUE`,
+// which leaked values via /proc/<pid>/cmdline to any local user.
 func (d *Deployer) fetchAndCreateSecrets() error {
 	if len(d.mf.Secrets) == 0 {
 		return nil
 	}
-	ns := d.mf.Namespace()
-	secretName := d.mf.Name + "-secrets"
 
-	// Build the --from-literal flags
-	args := []string{
-		"create", "secret", "generic", secretName,
-		"-n", ns,
-		"--save-config",
-		"--dry-run=client",
-		"-o", "yaml",
-	}
+	values := make(map[string]string, len(d.mf.Secrets))
 	for _, s := range d.mf.Secrets {
-		val, err := fetchSecretManagerValue(s.Secret, d.cfg.ProjectID)
+		v, err := d.fetchSecretManagerValue(s.Secret)
 		if err != nil {
 			return fmt.Errorf("fetching secret %s: %w", s.Secret, err)
 		}
-		args = append(args, fmt.Sprintf("--from-literal=%s=%s", s.EnvVar, val))
+		values[s.EnvVar] = v
 	}
 
-	out, err := output("kubectl", args...)
+	yaml, err := renderSecretManifest(d.mf.Name+"-secrets", d.mf.Namespace(), d.mf.Name, values)
 	if err != nil {
 		return err
 	}
-	return kubectlApplyYAML(out)
+	return d.kubectlApplyYAML(yaml)
 }
 
-func fetchSecretManagerValue(secretID, projectID string) (string, error) {
-	out, err := output("gcloud", "secrets", "versions", "access", "latest",
-		"--secret", secretID, "--project", projectID)
+func (d *Deployer) fetchSecretManagerValue(secretID string) (string, error) {
+	out, err := d.output("gcloud", "secrets", "versions", "access", "latest",
+		"--secret", secretID, "--project", d.cfg.ProjectID)
 	if err != nil {
 		return "", err
 	}
 	return strings.TrimSpace(out), nil
+}
+
+// renderSecretManifest produces a v1/Secret with base64-encoded values.
+// Stays as a separate function so it's straightforward to unit-test without
+// shelling out to anything.
+func renderSecretManifest(name, namespace, appLabel string, values map[string]string) (string, error) {
+	var buf bytes.Buffer
+	fmt.Fprintf(&buf, "apiVersion: v1\nkind: Secret\nmetadata:\n  name: %s\n  namespace: %s\n  labels:\n    app: %s\ntype: Opaque\ndata:\n",
+		name, namespace, appLabel)
+	// Iterate in a stable order so the rendered output is deterministic
+	// (tests rely on this and apply diffs stay clean).
+	keys := make([]string, 0, len(values))
+	for k := range values {
+		keys = append(keys, k)
+	}
+	sortStrings(keys)
+	for _, k := range keys {
+		enc := base64.StdEncoding.EncodeToString([]byte(values[k]))
+		fmt.Fprintf(&buf, "  %s: %s\n", k, enc)
+	}
+	return buf.String(), nil
+}
+
+// sortStrings is a tiny inline sort so we don't pull in "sort" just for one call.
+func sortStrings(s []string) {
+	for i := 1; i < len(s); i++ {
+		for j := i; j > 0 && s[j-1] > s[j]; j-- {
+			s[j-1], s[j] = s[j], s[j-1]
+		}
+	}
 }
 
 // ── Kubernetes manifests ──────────────────────────────────────────────────────
@@ -211,21 +251,22 @@ func (d *Deployer) applyKubernetesManifests() error {
 	if err != nil {
 		return err
 	}
-	return kubectlApplyYAML(yaml)
+	return d.kubectlApplyYAML(yaml)
 }
 
 func (d *Deployer) deleteKubernetesResources() error {
 	ns := d.mf.Namespace()
 	// Delete by label selector — catches all resources created for this service
-	_ = run("kubectl", "delete", "deployment", d.mf.Name, "-n", ns, "--ignore-not-found")
-	_ = run("kubectl", "delete", "service", d.mf.Name, "-n", ns, "--ignore-not-found")
-	_ = run("kubectl", "delete", "serviceaccount", d.mf.Name, "-n", ns, "--ignore-not-found")
-	_ = run("kubectl", "delete", "secret", d.mf.Name+"-secrets", "-n", ns, "--ignore-not-found")
+	_ = d.run("kubectl", "delete", "deployment", d.mf.Name, "-n", ns, "--ignore-not-found")
+	_ = d.run("kubectl", "delete", "service", d.mf.Name, "-n", ns, "--ignore-not-found")
+	_ = d.run("kubectl", "delete", "serviceaccount", d.mf.Name, "-n", ns, "--ignore-not-found")
+	_ = d.run("kubectl", "delete", "pdb", d.mf.Name, "-n", ns, "--ignore-not-found")
+	_ = d.run("kubectl", "delete", "secret", d.mf.Name+"-secrets", "-n", ns, "--ignore-not-found")
 	return nil
 }
 
 func (d *Deployer) waitForRollout() error {
-	return run("kubectl", "rollout", "status",
+	return d.run("kubectl", "rollout", "status",
 		"deployment/"+d.mf.Name, "-n", d.mf.Namespace(), "--timeout=5m")
 }
 
@@ -236,6 +277,7 @@ type templateData struct {
 	ProjectID  string
 	HasSecrets bool
 	HasGSA     bool
+	WantPDB    bool
 }
 
 func (d *Deployer) renderManifests() (string, error) {
@@ -244,6 +286,7 @@ func (d *Deployer) renderManifests() (string, error) {
 		ProjectID:  d.cfg.ProjectID,
 		HasSecrets: len(d.mf.Secrets) > 0,
 		HasGSA:     d.mf.NeedsGCPServiceAccount(),
+		WantPDB:    d.mf.Replicas > 1,
 	}
 
 	tmpl, err := template.New("manifests").Funcs(template.FuncMap{
@@ -260,6 +303,17 @@ func (d *Deployer) renderManifests() (string, error) {
 	return buf.String(), nil
 }
 
+// The template renders:
+//   - ServiceAccount with WI annotation when iam.roles is set
+//   - Deployment with restricted Pod Security defaults, liveness + readiness probes,
+//     and zone-spread constraints when replicas > 1
+//   - Service (type=LoadBalancer for `service.type: public`, ClusterIP otherwise)
+//   - PodDisruptionBudget when replicas > 1
+//
+// Note: public services emit a vanilla Service type=LoadBalancer. For prod,
+// front them with a Global HTTPS LB + Cloud Armor security policy; the
+// Service-as-LoadBalancer path is intentionally only used in dev. README →
+// Future Work tracks the Cloud Armor + managed cert wiring.
 const manifestTemplate = `
 {{- $ns := .Namespace -}}
 {{- $name := .Name -}}
@@ -294,11 +348,34 @@ spec:
         app: {{ $name }}
     spec:
       serviceAccountName: {{ $name }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+{{- if gt .Replicas 1 }}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: {{ $name }}
+{{- end }}
       containers:
         - name: {{ $name }}
           image: {{ .Image }}
+          imagePullPolicy: IfNotPresent
           ports:
             - containerPort: {{ .Service.Port }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            capabilities:
+              drop: ["ALL"]
           resources:
             requests:
               cpu: {{ .Resources.CPU }}
@@ -306,6 +383,22 @@ spec:
             limits:
               cpu: {{ .Resources.CPU }}
               memory: {{ .Resources.Memory }}
+          livenessProbe:
+            httpGet:
+              path: {{ .Health.Path }}
+              port: {{ .Health.Port }}
+            initialDelaySeconds: 10
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: {{ .Health.Path }}
+              port: {{ .Health.Port }}
+            initialDelaySeconds: 2
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 3
 {{- if or .Env .HasSecrets }}
           env:
 {{- range .Env }}
@@ -336,19 +429,42 @@ spec:
     - port: {{ .Service.Port }}
       targetPort: {{ .Service.Port }}
       protocol: TCP
+{{- if .WantPDB }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ $name }}
+  namespace: {{ $ns }}
+  labels:
+    app: {{ $name }}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: {{ $name }}
+{{- end }}
 `
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
-func run(name string, args ...string) error {
-	cmd := exec.Command(name, args...)
+// run executes a command with the deployer's cancellation context and a
+// per-command timeout. Stdout/stderr are streamed to the user.
+func (d *Deployer) run(name string, args ...string) error {
+	ctx, cancel := context.WithTimeout(d.ctx, cmdTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
 }
 
-func output(name string, args ...string) (string, error) {
-	cmd := exec.Command(name, args...)
+// output is the same as run but captures stdout into a string. Stderr still
+// streams to the user so failures are visible.
+func (d *Deployer) output(name string, args ...string) (string, error) {
+	ctx, cancel := context.WithTimeout(d.ctx, cmdTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, name, args...)
 	var buf bytes.Buffer
 	cmd.Stdout = &buf
 	cmd.Stderr = os.Stderr
@@ -358,8 +474,10 @@ func output(name string, args ...string) (string, error) {
 	return buf.String(), nil
 }
 
-func kubectlApplyYAML(yaml string) error {
-	cmd := exec.Command("kubectl", "apply", "-f", "-")
+func (d *Deployer) kubectlApplyYAML(yaml string) error {
+	ctx, cancel := context.WithTimeout(d.ctx, cmdTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "kubectl", "apply", "-f", "-")
 	cmd.Stdin = strings.NewReader(yaml)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr

@@ -33,3 +33,8 @@ output "db_password_secret_id" {
   description = "Grant roles/secretmanager.secretAccessor to app Workload Identity SAs to read this"
   value       = module.cloudsql.db_password_secret_id
 }
+
+output "db_connection_secret_id" {
+  description = "JSON-encoded Secret Manager entry: {host, port, db_name, db_user}."
+  value       = module.cloudsql.db_connection_secret_id
+}

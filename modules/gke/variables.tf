@@ -34,11 +34,34 @@ variable "master_cidr" {
 }
 
 variable "master_authorized_networks" {
-  description = "CIDRs allowed to reach the GKE API server endpoint"
+  description = "CIDRs allowed to reach the GKE API server endpoint. Must not include 0.0.0.0/0; the module rejects that via a precondition. Empty list is only valid when enable_private_endpoint = true."
   type = list(object({
     cidr_block   = string
     display_name = string
   }))
+
+  validation {
+    condition     = !contains([for n in var.master_authorized_networks : n.cidr_block], "0.0.0.0/0")
+    error_message = "master_authorized_networks must not contain 0.0.0.0/0. Restrict to office, VPN, or IAP CIDRs."
+  }
+}
+
+variable "enable_private_endpoint" {
+  description = "If true, the GKE master is only reachable from the VPC and master_authorized_networks (via private connectivity). Recommended true for prod."
+  type        = bool
+  default     = false
+}
+
+variable "master_global_access_enabled" {
+  description = "When the master endpoint is private, allow clients from any GCP region (not just the cluster's region) to reach it."
+  type        = bool
+  default     = true
+}
+
+variable "database_encryption_key_name" {
+  description = "Cloud KMS key resource name (projects/.../keys/...) to encrypt etcd application-layer secrets. When null, GCP-managed keys are used. Cannot be changed without recreating the cluster."
+  type        = string
+  default     = null
 }
 
 variable "node_zones" {

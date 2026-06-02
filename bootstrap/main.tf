@@ -17,6 +17,9 @@ locals {
     "artifactregistry.googleapis.com",
     "logging.googleapis.com",
     "monitoring.googleapis.com",
+    # KMS underpins CMEK for GKE etcd application-layer secrets and any
+    # future customer-managed encryption on Cloud SQL or GCS.
+    "cloudkms.googleapis.com",
   ]
 }
 
@@ -97,6 +100,7 @@ resource "google_project_service" "shared_apis" {
     "secretmanager.googleapis.com",
     "logging.googleapis.com",
     "monitoring.googleapis.com",
+    "cloudkms.googleapis.com",
   ])
 
   project                    = google_project.shared.project_id

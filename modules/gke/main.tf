@@ -74,11 +74,20 @@ resource "google_container_cluster" "main" {
     services_secondary_range_name = "services"
   }
 
-  # Nodes have private IPs only; master endpoint is public but gated by authorized networks
+  # Nodes always have private IPs. The master endpoint is public for dev/stage
+  # (gated by master_authorized_networks) and private for prod
+  # (enable_private_endpoint = true → only reachable from inside the VPC).
   private_cluster_config {
     enable_private_nodes    = true
-    enable_private_endpoint = false
+    enable_private_endpoint = var.enable_private_endpoint
     master_ipv4_cidr_block  = var.master_cidr
+
+    dynamic "master_global_access_config" {
+      for_each = var.enable_private_endpoint ? [1] : []
+      content {
+        enabled = var.master_global_access_enabled
+      }
+    }
   }
 
   master_authorized_networks_config {
@@ -88,6 +97,16 @@ resource "google_container_cluster" "main" {
         cidr_block   = cidr_blocks.value.cidr_block
         display_name = cidr_blocks.value.display_name
       }
+    }
+  }
+
+  # CMEK for application-layer secrets in etcd. When key_name is null, the
+  # block is omitted and Google-managed keys protect Secrets at rest.
+  dynamic "database_encryption" {
+    for_each = var.database_encryption_key_name == null ? [] : [1]
+    content {
+      state    = "ENCRYPTED"
+      key_name = var.database_encryption_key_name
     }
   }
 
@@ -109,14 +128,33 @@ resource "google_container_cluster" "main" {
     http_load_balancing {
       disabled = false
     }
+    # NodeLocal DNSCache — large QPS reduction on internal DNS, no app changes.
+    dns_cache_config {
+      enabled = true
+    }
+    # Required for PVCs backed by pd-ssd / pd-standard / pd-balanced.
+    gce_persistent_disk_csi_driver_config {
+      enabled = true
+    }
   }
 
+  # Capture the control-plane audit trail: APISERVER + SCHEDULER + CONTROLLER_MANAGER
+  # are how you forensically answer "who deleted this Deployment?".
   logging_config {
-    enable_components = ["SYSTEM_COMPONENTS", "WORKLOADS"]
+    enable_components = [
+      "SYSTEM_COMPONENTS",
+      "WORKLOADS",
+      "APISERVER",
+      "SCHEDULER",
+      "CONTROLLER_MANAGER",
+    ]
   }
 
   monitoring_config {
     enable_components = ["SYSTEM_COMPONENTS"]
+    managed_prometheus {
+      enabled = true
+    }
   }
 
   maintenance_policy {
@@ -124,6 +162,15 @@ resource "google_container_cluster" "main" {
       start_time = "2024-01-01T03:00:00Z"
       end_time   = "2024-01-01T07:00:00Z"
       recurrence = "FREQ=WEEKLY;BYDAY=SA,SU"
+    }
+  }
+
+  # Defence-in-depth on the master endpoint and a hint to future readers
+  # that the precondition is intentional, not a leftover.
+  lifecycle {
+    precondition {
+      condition     = var.enable_private_endpoint || length(var.master_authorized_networks) > 0
+      error_message = "When enable_private_endpoint = false, master_authorized_networks must list at least one CIDR. Public master + unrestricted auth networks is rejected."
     }
   }
 }
@@ -155,6 +202,10 @@ resource "google_container_node_pool" "main" {
 
     service_account = google_service_account.gke_nodes.email
     oauth_scopes    = ["https://www.googleapis.com/auth/cloud-platform"]
+
+    metadata = {
+      disable-legacy-endpoints = "true"
+    }
 
     # Required for Workload Identity on nodes
     workload_metadata_config {

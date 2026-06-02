@@ -52,5 +52,11 @@ func validate(m *Manifest) error {
 	if m.Resources.Memory == "" {
 		m.Resources.Memory = "256Mi"
 	}
+	if m.Health.Path == "" {
+		m.Health.Path = "/health"
+	}
+	if m.Health.Port == 0 {
+		m.Health.Port = m.Service.Port
+	}
 	return nil
 }

@@ -50,10 +50,22 @@ variable "cloudsql_tier" {
 }
 
 variable "master_authorized_networks" {
-  description = "CIDRs allowed to reach the GKE API server — restrict to VPN/office IPs in production"
+  description = "CIDRs allowed to reach the GKE API server. Required when enable_private_endpoint = false. Never 0.0.0.0/0."
   type = list(object({
     cidr_block   = string
     display_name = string
   }))
   default = []
+}
+
+variable "backup_retention_days" {
+  description = "Daily Cloud SQL backups to keep."
+  type        = number
+  default     = 14
+}
+
+variable "transaction_log_retention_days" {
+  description = "Cloud SQL PITR window in days."
+  type        = number
+  default     = 7
 }

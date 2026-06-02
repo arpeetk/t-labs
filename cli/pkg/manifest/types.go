@@ -11,10 +11,18 @@ type Manifest struct {
 
 	Resources Resources `yaml:"resources"`
 	Service   Service   `yaml:"service"`
+	Health    Health    `yaml:"health"`
 
-	Env     []EnvVar  `yaml:"env"`
+	Env     []EnvVar    `yaml:"env"`
 	Secrets []SecretRef `yaml:"secrets"`
 	IAM     IAMConfig   `yaml:"iam"`
+}
+
+// Health describes the HTTP endpoint kubelet uses for liveness/readiness probes.
+// Defaults are filled in by validate(): path=/health on the service port.
+type Health struct {
+	Path string `yaml:"path"`
+	Port int    `yaml:"port"`
 }
 
 type Resources struct {

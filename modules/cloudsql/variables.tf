@@ -50,3 +50,33 @@ variable "deletion_protection" {
   type        = bool
   default     = true
 }
+
+variable "backup_retention_days" {
+  description = "Number of daily backups to retain. Prod typically 30; dev/stage 7."
+  type        = number
+  default     = 7
+  validation {
+    condition     = var.backup_retention_days >= 1 && var.backup_retention_days <= 365
+    error_message = "backup_retention_days must be between 1 and 365."
+  }
+}
+
+variable "transaction_log_retention_days" {
+  description = "Number of days of PITR (write-ahead log) retention. Prod typically 14+; dev/stage 7."
+  type        = number
+  default     = 7
+  validation {
+    condition     = var.transaction_log_retention_days >= 1 && var.transaction_log_retention_days <= 35
+    error_message = "transaction_log_retention_days must be between 1 and 35 (GCP limit)."
+  }
+}
+
+variable "deny_maintenance_period" {
+  description = "Optional deny window during which Google may not perform routine maintenance. Use ISO date+time. Set to null on dev/stage."
+  type = object({
+    start_date = string # YYYY-MM-DD
+    end_date   = string # YYYY-MM-DD
+    time       = string # HH:MM:SS
+  })
+  default = null
+}

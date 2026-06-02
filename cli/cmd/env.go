@@ -73,9 +73,3 @@ func lookupProjectID(env string) string {
 	return ""
 }
 
-func runKubectl(args ...string) error {
-	cmd := exec.Command("kubectl", args...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
-}

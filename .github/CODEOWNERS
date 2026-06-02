@@ -1,0 +1,19 @@
+# CODEOWNERS — review requirements for the t-labs infrastructure repo.
+# Anything touching prod, bootstrap, or CI/CD wiring requires infra-admin review.
+# See https://docs.github.com/en/repositories/managing-your-repositories-settings-and-features/customizing-your-repository/about-code-owners
+
+*                          @arpeetk
+
+# Bootstrap creates org-level resources, projects, IAM, WIF, state buckets.
+# A bad change here can break every environment at once.
+/bootstrap/                @arpeetk
+
+# Production Terraform — apply is gated by the prod GitHub environment, but
+# we want a human eyeball on the diff before the gate is even reached.
+/environments/prod/        @arpeetk
+
+# Shared modules — a change here lands in every environment on next apply.
+/modules/                  @arpeetk
+
+# CI/CD wiring — workflows hold WIF identities and apply flows.
+/.github/workflows/        @arpeetk

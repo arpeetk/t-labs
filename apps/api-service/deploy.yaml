@@ -1,6 +1,7 @@
 # tl deployer manifest — api-service
-# Private backend service with Cloud SQL (direct private IP) and Secret Manager.
-# DB_HOST: get the value from `terraform output cloudsql_private_ip` in environments/dev/
+# Private backend service. Connects to Cloud SQL over its private IP, with
+# host/port/db_name/db_user supplied via a Secret Manager JSON blob written by
+# modules/cloudsql — no IPs hardcoded here.
 name: api-service
 environment: dev
 
@@ -12,20 +13,20 @@ resources:
   memory: "256Mi"
 
 service:
-  type: private   # ClusterIP — internal only, called by other services
+  type: private # ClusterIP — internal only, called by other services
+  port: 8080
+
+health:
+  path: /health
   port: 8080
 
 env:
   - name: PORT
     value: "8080"
-  - name: DB_USER
-    value: "appuser"
-  - name: DB_NAME
-    value: "appdb"
-  - name: DB_HOST
-    value: "10.241.220.2"  # terraform output cloudsql_private_ip (environments/dev/)
 
 secrets:
+  - envVar: DB_CONNECTION
+    secret: t-labs-dev-db-connection
   - envVar: DB_PASSWORD
     secret: t-labs-dev-db-password
 
