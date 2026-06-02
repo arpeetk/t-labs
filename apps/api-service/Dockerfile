@@ -5,7 +5,7 @@ RUN go mod download
 COPY main.go .
 RUN go build -o api-service .
 
-FROM alpine:3.21
+FROM alpine:3.22
 RUN adduser -D -u 1000 app
 USER app
 COPY --from=build /src/api-service /api-service
