@@ -3,7 +3,7 @@ WORKDIR /src
 COPY main.go .
 RUN go mod init hello-world && go build -o hello-world .
 
-FROM alpine:3.19
+FROM alpine:3.22
 RUN adduser -D -u 1000 app
 USER app
 COPY --from=build /src/hello-world /hello-world
